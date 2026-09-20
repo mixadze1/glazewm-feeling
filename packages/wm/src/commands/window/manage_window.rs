@@ -115,7 +115,7 @@ pub(crate) fn inspect_candidate(
   // Exclude before cloaking, insertion or focus changes. An ordinary
   // post-manage ignore rule is too late to avoid disturbing the layout.
   #[cfg(target_os = "windows")]
-  if super::is_task_manager_window(native_window) {
+  if super::is_unmanaged_system_window(native_window) {
     return Ok(None);
   }
 

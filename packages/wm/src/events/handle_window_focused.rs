@@ -20,7 +20,7 @@ pub fn handle_window_focused(
   config: &mut UserConfig,
 ) -> anyhow::Result<()> {
   #[cfg(target_os = "windows")]
-  if crate::commands::window::is_task_manager_window(native_window) {
+  if crate::commands::window::is_unmanaged_system_window(native_window) {
     // Keep manual OS focus usable, without adopting it into WM focus or
     // overriding it through the recent-close/minimize focus correction.
     state.is_focus_synced = false;
