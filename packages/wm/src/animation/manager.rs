@@ -61,17 +61,15 @@ const WS_COMPLETE_THRESHOLD_PX: f32 = 1.5;
 /// A freshly created window has often not painted its first frame when the
 /// open animation starts, so its DWM thumbnail is momentarily blank/black
 /// — producing a black box that slides in and "pops" to real content at
-/// the end. Holding the animation at progress `0.0` for this period (the
-/// surrogate stays off-screen for slide/zoom and fully transparent for
-/// fade) gives the app time to paint, so the slide reveals real content
+/// the end. Holding the animation at progress `0.0` with its surrogate
+/// hidden gives the app time to paint, so the slide reveals real content
 /// from the first visible frame. Implemented via
 /// `WindowAnimationState::start_delay`, which is measured from the first
 /// rendered frame, so the app gets this long *after* the first animation
-/// tick to paint. Roughly two frames at 60 Hz — long enough to cover the
-/// typical first-paint latency without a perceptible delay in the window
-/// appearing.
+/// tick to paint. The overlay remains hidden during this interval, even
+/// when a slide starts inside the monitor or a fade starts opaque.
 #[cfg(target_os = "windows")]
-const OPEN_PAINT_GRACE: Duration = Duration::from_millis(30);
+const OPEN_PAINT_GRACE: Duration = Duration::from_millis(80);
 
 /// Duration of the surrogate fade-out at animation completion.
 ///
@@ -1702,6 +1700,16 @@ impl AnimationManager {
       let (current_rect, opacity) = animation.current_state_at(now);
       let workspace_reveal = animation.workspace_reveal_progress_at(now);
 
+      // A new app must paint at its final size before its thumbnail is
+      // exposed. Progress zero alone does not hide a slide whose start
+      // rect is still inside the monitor (or a partially opaque fade).
+      #[cfg(target_os = "windows")]
+      if animation.remaining_at(now) > animation.duration
+        && self.resize_sessions.contains_key(&window_id)
+      {
+        return (AnimationPositionResult::Frozen, None);
+      }
+
       // Drive the surrogate overlay when one is active. `has_surrogate()`
       // requires a valid DWM thumbnail — if thumbnail registration failed
       // (e.g. elevated/UWP window), the surrogate is transparent and
@@ -2152,20 +2160,7 @@ impl AnimationManager {
       anim_config.easing.clone(),
     );
 
-    // For `None`/fade style only: hold at progress 0.0 so the app can
-    // paint before the surrogate reveals it. At progress 0.0 the
-    // surrogate sits at the window's target rect with `start_opacity`,
-    // so showing it too early would flash a black (unpainted)
-    // rectangle at the window's position.
-    //
-    // Slide and zoom surrogates are invisible at progress 0.0 (off-screen
-    // and zero-size respectively), so the grace period only adds a
-    // blank gap for those styles — omit it so the animation starts
-    // immediately and the blank between cloak and first visible
-    // surrogate pixel is minimised.
-    if is_stationary && !is_zoom {
-      anim.start_delay = OPEN_PAINT_GRACE;
-    }
+    anim.start_delay = OPEN_PAINT_GRACE;
 
     // Zoom open does NOT auto-fade — the surrogate is fully opaque so the
     // small thumbnail is immediately visible as it grows. Fade-in while
@@ -2182,12 +2177,28 @@ impl AnimationManager {
       anim.target_opacity = Some(OpacityValue(effect_frac));
     }
 
-    // Cloak zoom windows immediately so the real window never appears at
-    // full size before the surrogate takes over. Non-zoom styles are
-    // cloaked later in the Frozen branch of platform_sync (on the
-    // first frame).
-    if is_zoom {
-      let _ = native_window.set_cloaked(true);
+    // The animation's start rect is a visual offset, not the app's native
+    // geometry. Size the hidden app before registering its thumbnail;
+    // otherwise DWM samples target-sized content from a startup-sized
+    // window and the contents jump/reflow during the slide.
+    if let Err(err) = native_window.set_cloaked(true) {
+      tracing::warn!("Failed to cloak window for open animation: {err}.");
+      return;
+    }
+    if native_window.frame_with_shadows().ok().as_ref()
+      != Some(&target_rect)
+    {
+      use wm_platform::{
+        WindowZOrder, SWP_NOACTIVATE, SWP_NOSENDCHANGING, SWP_NOZORDER,
+      };
+      if let Err(err) = native_window.set_window_pos(
+        &WindowZOrder::Normal,
+        &target_rect,
+        SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_NOZORDER,
+      ) {
+        tracing::warn!("Failed to prepare open animation: {err}.");
+        return;
+      }
     }
 
     match ResizeSession::begin(
@@ -2206,16 +2217,9 @@ impl AnimationManager {
     ) {
       Ok(mut session) => {
         session.zoom = is_zoom;
-        let initial_opacity_u8 = (effective_opacity_from.clamp(0.0, 1.0)
-          * effect_opacity as f32)
-          .round() as u8;
-        if effective_opacity_from < 1.0 {
-          session.update(&start_rect, initial_opacity_u8);
-        }
-        // For zoom: the drive loop handles the first frame.
-        // update_zoom_fade is NOT called here so the surrogate
-        // stays hidden until the first animation tick sets the
-        // correct progress.
+        session.mark_session_cloaked();
+        // Keep every style hidden until the paint grace expires. The
+        // first visible tick applies the initial opacity and geometry.
         self.animations.insert(window_id, anim);
         self.resize_sessions.insert(window_id, session);
         if !is_stationary {
