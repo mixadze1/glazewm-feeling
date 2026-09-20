@@ -28,7 +28,7 @@ pub fn manage_window(
   config: &mut UserConfig,
 ) -> anyhow::Result<()> {
   let Some(native_properties) =
-    check_is_manageable(&native_window).unwrap_or(None)
+    inspect_candidate(&native_window).unwrap_or(None)
   else {
     return Ok(());
   };
@@ -105,7 +105,7 @@ pub fn manage_window(
 ///
 /// Returns `Ok(Some(properties))` if the window is manageable and its
 /// properties were retrieved successfully.
-fn check_is_manageable(
+fn inspect_candidate(
   native_window: &NativeWindow,
 ) -> anyhow::Result<Option<NativeWindowProperties>> {
   if !native_window.is_visible()? {

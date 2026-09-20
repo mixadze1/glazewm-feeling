@@ -13,7 +13,7 @@ pub fn animation_progress(start_time: Instant, duration: Duration) -> f32 {
 ///
 /// Allows callers to supply a predictive timestamp (e.g. vsync wake-up
 /// time plus an estimated pipeline offset) so the computed position aligns
-/// with the DWM composition event rather than the moment `update_internal`
+/// with the DWM composition event rather than the moment `tick`
 /// runs. Uses `saturating_duration_since` so a `now` that precedes
 /// `start_time` (possible on the first frame when `pipeline_offset` >
 /// elapsed) returns `0.0` instead of panicking.

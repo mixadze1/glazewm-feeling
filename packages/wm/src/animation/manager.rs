@@ -29,7 +29,7 @@ const VSYNC_LEAD_FRACTION: f32 = 0.5;
 /// Pipeline latency estimate from vsync wake to DWM composition pickup.
 ///
 /// The animation timer thread records the `Instant` at which
-/// `IDXGIOutput::WaitForVBlank` returns. By the time `update_internal`
+/// `IDXGIOutput::WaitForVBlank` returns. By the time `tick`
 /// runs and calls `DwmUpdateThumbnailProperties`, roughly this many
 /// microseconds have elapsed (Tokio scheduling + compute). Using
 /// vsync_time + `VSYNC_PIPELINE_OFFSET_US` as "now" shifts the computed
@@ -166,7 +166,7 @@ struct WorkspaceSwitchState {
   windows: HashMap<Uuid, WorkspaceSwitchEntry>,
   /// Time of the first rendered frame, lazily set on the first tick.
   ///
-  /// Initialized to `None` so the clock starts when `update_internal`
+  /// Initialized to `None` so the clock starts when `tick`
   /// first renders the animation rather than when
   /// `start_workspace_switch` is called mid-`platform_sync`. Without
   /// lazy init, a cold-start gap of 1-3 DWM frames causes surrogates to
@@ -245,7 +245,7 @@ struct IrisSwitchState {
   easing: EasingFunction,
 }
 
-/// Result of [`AnimationManager::start_animation_if_needed`], describing
+/// Result of [`AnimationManager::sync_window`], describing
 /// what the caller should do with the real app window's position this
 /// frame.
 pub enum AnimationPositionResult {
@@ -292,7 +292,7 @@ pub struct AnimationManager {
   /// Timestamp of the most recent `IDXGIOutput::WaitForVBlank` wake-up.
   ///
   /// Written by the timer thread immediately after vsync fires. Read by
-  /// `update_internal` to compute animation progress at a predictive
+  /// `tick` to compute animation progress at a predictive
   /// timestamp (vsync time + a fraction of the vblank period; see
   /// [`VSYNC_LEAD_FRACTION`]) rather than `Instant::now()`, compensating
   /// for the pipeline delay between vsync wake and DWM composition.
@@ -697,7 +697,7 @@ impl AnimationManager {
             // wait runs without holding it — cleanup can clear
             // the Arc without blocking an in-progress wait.
             // Record the wake-up time immediately after vsync fires so
-            // `update_internal` can compute phase-accurate animation
+            // `tick` can compute phase-accurate animation
             // progress.
             #[cfg(target_os = "windows")]
             let dxgi_waited = {
@@ -758,7 +758,7 @@ impl AnimationManager {
   ) -> anyhow::Result<()> {
     if let Some(switch) = &mut state.animation_manager.workspace_switch {
       switch.duration = Duration::ZERO;
-      Self::update_internal(state, config)?;
+      Self::tick(state, config)?;
     }
     Ok(())
   }
@@ -852,7 +852,7 @@ impl AnimationManager {
   }
 
   /// Internal update, accessed through `WmState` to avoid double-borrow.
-  pub(crate) fn update_internal(
+  pub(crate) fn tick(
     state: &mut WmState,
     config: &UserConfig,
   ) -> anyhow::Result<()> {
@@ -887,7 +887,7 @@ impl AnimationManager {
     // from the layout tree when the close animation started, so they
     // are not queued for redraw by the loop above and cannot be driven
     // through `platform_sync`. We replicate the same per-frame update
-    // logic used inside `start_animation_if_needed` for surrogate
+    // logic used inside `sync_window` for surrogate
     // sessions.
     #[cfg(target_os = "windows")]
     {
@@ -1531,7 +1531,7 @@ impl AnimationManager {
   /// Returns [`AnimationPositionResult::Frozen`] while a surrogate overlay
   /// is active so the caller does not reposition the real window on
   /// intermediate frames.
-  pub fn start_animation_if_needed(
+  pub fn sync_window(
     &mut self,
     window_id: Uuid,
     is_resize: bool,
@@ -1879,7 +1879,7 @@ impl AnimationManager {
   /// so that focus events during the animation do not prematurely
   /// uncloak the real window before the surrogate finishes sliding in.
   #[cfg(target_os = "windows")]
-  pub fn is_workspace_switch_incoming(&self, window_id: &Uuid) -> bool {
+  pub fn has_incoming_thumbnail(&self, window_id: &Uuid) -> bool {
     self
       .workspace_switch
       .as_ref()
@@ -2227,7 +2227,7 @@ impl AnimationManager {
   ///   while fading. The real window is never repositioned during a close
   ///   animation.
   ///
-  /// When the animation completes, `update_internal` sends `WM_CLOSE` and
+  /// When the animation completes, `tick` sends `WM_CLOSE` and
   /// unmanages the window. No-ops if a close animation is already active.
   #[cfg(target_os = "windows")]
   pub fn start_close_animation(
@@ -2681,7 +2681,7 @@ mod tests {
     let mut manager = AnimationManager::new(tx);
     let ids = [Uuid::new_v4(), Uuid::new_v4()];
     manager.workspace_switch = Some(workspace_switch(ids));
-    assert!(!manager.is_workspace_switch_incoming(&ids[1]));
+    assert!(!manager.has_incoming_thumbnail(&ids[1]));
   }
 
   #[test]

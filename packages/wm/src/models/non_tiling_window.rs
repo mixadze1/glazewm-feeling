@@ -148,12 +148,14 @@ impl_window_getters!(NonTilingWindow);
 impl PositionGetters for NonTilingWindow {
   fn to_rect(&self) -> anyhow::Result<Rect> {
     match self.state() {
-      WindowState::Fullscreen(_fullscreen) => {
+      WindowState::Fullscreen(fullscreen) => {
+        #[cfg(target_os = "macos")]
+        let _ = fullscreen;
         let monitor = self.monitor().context("No monitor.")?;
 
         #[cfg(target_os = "windows")]
         {
-          if _fullscreen.maximized {
+          if fullscreen.maximized {
             Ok(monitor.native_properties().working_area)
           } else {
             monitor.to_rect()

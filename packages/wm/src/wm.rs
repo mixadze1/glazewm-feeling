@@ -246,7 +246,7 @@ impl WindowManager {
   ) -> anyhow::Result<()> {
     use crate::animation::AnimationManager;
     // Access animation_manager through state to avoid double borrow
-    AnimationManager::update_internal(&mut self.state, config)
+    AnimationManager::tick(&mut self.state, config)
   }
 
   pub fn process_commands(
@@ -416,7 +416,7 @@ impl WindowManager {
                 // `IApplicationView` cloak has hidden the
                 // window but the surrogate has not yet been
                 // composited, which briefly exposes the desktop.
-                // `AnimationManager::update_internal` sends `WM_CLOSE`
+                // `AnimationManager::tick` sends `WM_CLOSE`
                 // once the close animation finishes.
                 if state.animation_manager.has_close_animation(&window_id)
                 {

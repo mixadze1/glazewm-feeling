@@ -17,7 +17,7 @@ use crate::{
 /// Called at the start of a close animation so sibling windows begin their
 /// reflow animations immediately, in parallel with the close surrogate.
 /// The animation state is intentionally preserved here because
-/// `AnimationManager::update_internal` continues driving the surrogate and
+/// `AnimationManager::tick` continues driving the surrogate and
 /// sends `WM_CLOSE` once the animation completes.
 #[cfg(target_os = "windows")]
 pub fn detach_window_for_close(
@@ -32,7 +32,7 @@ pub fn detach_window_for_close(
   state.window_target_positions.remove(&window.id());
   // NOTE: `state.animation_manager.remove_animation` is intentionally
   // skipped — the close surrogate must keep running until
-  // `AnimationManager::update_internal` sends `WM_CLOSE` on completion.
+  // `AnimationManager::tick` sends `WM_CLOSE` on completion.
 
   for ancestor in ancestors.iter().rev() {
     flatten_child_split_containers(ancestor)?;

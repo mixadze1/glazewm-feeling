@@ -150,15 +150,13 @@ fn sync_focus(
   // asynchronously remove the DWM cloak when a window becomes the
   // foreground window, causing the slow `IApplicationView::SetCloak`
   // path to fire on the next animation tick and blocking the frame loop.
-  // `AnimationManager::update_internal` re-queues the focus change once
+  // `AnimationManager::tick` re-queues the focus change once
   // the animation completes and the window is uncloaked.
   #[cfg(target_os = "windows")]
   if let Some(window) = &native_window {
     let is_ws_incoming =
       state.animation_manager.is_workspace_switch_active()
-        && state
-          .animation_manager
-          .is_workspace_switch_incoming(&window.id());
+        && state.animation_manager.has_incoming_thumbnail(&window.id());
     let has_resize_session = state
       .animation_manager
       .resize_sessions
@@ -608,7 +606,7 @@ fn redraw_containers(
   // Whether any window in this redraw cycle changes size. Pure
   // translations in the same cycle then share the `window_resize` timing
   // so all edges stay in lock-step during the relayout (see
-  // `AnimationManager::start_animation_if_needed`).
+  // `AnimationManager::sync_window`).
   let cycle_has_resize = windows_to_update.iter().any(|window| {
     let target_rect = window.to_rect().and_then(|rect| {
       window
@@ -788,9 +786,7 @@ fn redraw_containers(
     // do not prematurely uncloak the real window.
     #[cfg(target_os = "windows")]
     let is_frozen_by_ws_animation = !is_workspace_transfer
-      && state
-        .animation_manager
-        .is_workspace_switch_incoming(&window.id());
+      && state.animation_manager.has_incoming_thumbnail(&window.id());
     #[cfg(not(target_os = "windows"))]
     let is_frozen_by_ws_animation = false;
 
@@ -905,7 +901,7 @@ fn redraw_containers(
       if is_frozen_by_ws_animation {
         (AnimationPositionResult::Frozen, None)
       } else {
-        state.animation_manager.start_animation_if_needed(
+        state.animation_manager.sync_window(
           window.id(),
           is_resize,
           cycle_has_resize,
@@ -929,7 +925,7 @@ fn redraw_containers(
         )
       }
       #[cfg(not(target_os = "windows"))]
-      state.animation_manager.start_animation_if_needed(
+      state.animation_manager.sync_window(
         window.id(),
         is_resize,
         cycle_has_resize,
