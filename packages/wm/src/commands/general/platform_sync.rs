@@ -54,6 +54,26 @@ pub fn platform_sync(
   state: &mut WmState,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
+  #[cfg(target_os = "windows")]
+  if state.desktop_windows.is_some() {
+    return Ok(());
+  }
+
+  // Shell's Minimize All changes several native windows before their
+  // individual events reach us. Reconcile them before a relayout can
+  // restore windows whose minimize event is still queued. Explicit state
+  // changes (e.g. restoring via a command) must retain their target state.
+  #[cfg(target_os = "windows")]
+  for window in state.windows() {
+    if window.state() != WindowState::Minimized
+      && !state.pending_sync.is_window_state_change(&window.id())
+      && window.native().is_minimized().unwrap_or(false)
+    {
+      let native = window.native().clone();
+      crate::events::handle_window_minimized(&native, state, config)?;
+    }
+  }
+
   let focused_container =
     state.focused_container().context("No focused container.")?;
 
@@ -678,6 +698,17 @@ fn redraw_containers(
     // Skip updating the window's position if it only required a z-order
     // change.
     if !windows_to_redraw.contains(window) {
+      continue;
+    }
+
+    // A native minimize can also arrive during this redraw. Leave it to
+    // its queued event instead of undoing it with restore/reposition.
+    #[cfg(target_os = "windows")]
+    if window.state() != WindowState::Minimized
+      && !state.pending_sync.is_window_state_change(&window.id())
+      && window.native().is_minimized()?
+    {
+      state.animation_manager.remove_animation(&window.id());
       continue;
     }
 

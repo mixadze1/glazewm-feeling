@@ -260,6 +260,8 @@ pub enum InvokeCommand {
   WmRedraw,
   WmReloadConfig,
   WmTogglePause,
+  /// Show the desktop, or restore the windows hidden by the last toggle.
+  WmToggleDesktop,
 }
 
 impl<'de> Deserialize<'de> for InvokeCommand {

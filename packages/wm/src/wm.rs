@@ -91,6 +91,35 @@ impl WindowManager {
   ) -> anyhow::Result<()> {
     let state = &mut self.state;
 
+    #[cfg(target_os = "windows")]
+    if let Some(windows) = &state.desktop_windows {
+      match &event {
+        PlatformEvent::Mouse(_) => return Ok(()),
+        PlatformEvent::Window(WindowEvent::Focused { window, .. }) => {
+          // Taskbar activation can uncloak a saved window. Resume the
+          // desktop in that case; ignore the focus reset to Explorer.
+          if !windows.iter().any(|saved| saved.id() == window.id())
+            || window.is_cloaked().unwrap_or(true)
+          {
+            return Ok(());
+          }
+          crate::commands::general::toggle_desktop(state, config)?;
+        }
+        PlatformEvent::Window(WindowEvent::Shown { window, .. })
+          if state.window_from_native(window).is_none() =>
+        {
+          crate::commands::general::toggle_desktop(state, config)?;
+        }
+        PlatformEvent::DisplaySettingsChanged => {
+          crate::commands::general::toggle_desktop(state, config)?;
+        }
+        PlatformEvent::Window(WindowEvent::Destroyed { .. })
+        | PlatformEvent::Window(WindowEvent::TitleChanged { .. })
+        | PlatformEvent::Keybinding(_) => {}
+        _ => return Ok(()),
+      }
+    }
+
     match event {
       PlatformEvent::DisplaySettingsChanged => {
         handle_display_settings_changed(state, config)
@@ -329,6 +358,13 @@ impl WindowManager {
     // No-op if WM is currently paused.
     if state.is_paused && *command != InvokeCommand::WmTogglePause {
       return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    if state.desktop_windows.is_some()
+      && *command != InvokeCommand::WmToggleDesktop
+    {
+      crate::commands::general::toggle_desktop(state, config)?;
     }
 
     if subject_container.is_detached() {
@@ -942,6 +978,16 @@ impl WindowManager {
         enable_binding_mode(name, state, config)
       }
       InvokeCommand::WmExit => state.emit_exit(),
+      InvokeCommand::WmToggleDesktop => {
+        #[cfg(target_os = "windows")]
+        {
+          crate::commands::general::toggle_desktop(state, config)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+          bail!("Desktop toggle is only supported on Windows.")
+        }
+      }
       InvokeCommand::WmRedraw => {
         state
           .pending_sync

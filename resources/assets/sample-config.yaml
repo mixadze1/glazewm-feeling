@@ -353,6 +353,11 @@ keybindings:
   - commands: ["toggle-minimized"]
     bindings: ["alt+m"]
 
+  # Show desktop / restore the previous window layout (only while active).
+  # Change bindings below to customize this shortcut.
+  - commands: ["wm-toggle-desktop"]
+    bindings: ["alt+shift+m"]
+
   # Close focused window.
   - commands: ["close"]
     bindings: ["alt+shift+q"]

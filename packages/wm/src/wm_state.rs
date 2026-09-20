@@ -83,6 +83,11 @@ pub struct WmState {
   /// Whether the WM is paused.
   pub is_paused: bool,
 
+  /// Temporarily cloaked windows. Keep the layout tree intact while the
+  /// desktop is shown so restoring preserves splits, sizes and states.
+  #[cfg(target_os = "windows")]
+  pub desktop_windows: Option<Vec<NativeWindow>>,
+
   /// Whether the OS focused window is the same as the WM focused window.
   pub is_focus_synced: bool,
 
@@ -121,6 +126,8 @@ impl WmState {
       binding_modes: Vec::new(),
       ignored_windows: Vec::new(),
       is_paused: false,
+      #[cfg(target_os = "windows")]
+      desktop_windows: None,
       is_focus_synced: false,
       has_initialized: false,
       event_tx,
@@ -649,9 +656,8 @@ impl WmState {
       .find(|descendant| descendant.state() != WindowState::Minimized)
       .map(Into::into);
 
-    non_minimized_focus_target
-      .or(descendant_focus_order.first().cloned())
-      .or(Some(workspace.into()))
+    // Never restore an already minimized window just to supply focus.
+    non_minimized_focus_target.or(Some(workspace.into()))
   }
 
   /// Returns all containers that contain the given point.
@@ -752,5 +758,44 @@ impl Drop for WmState {
           .set_transparency(&OpacityValue::from_alpha(u8::MAX));
       }
     }
+  }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod desktop_tests {
+  use super::*;
+  use crate::{commands::container::attach_container, models::NonTilingWindow};
+
+  #[test]
+  fn minimizing_last_window_focuses_workspace_not_minimized_sibling() {
+    let (event_tx, _) = mpsc::unbounded_channel();
+    let (exit_tx, _) = mpsc::unbounded_channel();
+    let (tick_tx, _) = mpsc::unbounded_channel();
+    let mut state = WmState::new(
+      Dispatcher::mock(), event_tx, exit_tx, tick_tx,
+    );
+    let first = NonTilingWindow::mock()
+      .state(WindowState::Minimized).call();
+    let second = NonTilingWindow::mock()
+      .state(WindowState::Minimized).call();
+    let workspace = Workspace::mock()
+      .non_tiling_windows(vec![first.clone(), second.clone()]).call();
+    let monitor = Monitor::mock()
+      .workspaces(vec![workspace.clone()]).call();
+    attach_container(
+      &monitor.into(), &state.root_container.clone().into(), None,
+    ).unwrap();
+    set_focused_descendant(&first.clone().into(), None);
+    assert_eq!(
+      state.focus_target_after_removal(&first.clone().into()),
+      Some(workspace.clone().into()),
+    );
+    second.set_state(WindowState::Floating(Default::default()));
+    assert_eq!(
+      state.focus_target_after_removal(&first.into()),
+      Some(second.into()),
+    );
+    // Avoid native cleanup for mock handles.
+    state.root_container = RootContainer::new();
   }
 }

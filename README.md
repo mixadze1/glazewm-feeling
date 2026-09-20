@@ -107,9 +107,26 @@ Local development and guidelines are available in the [contributing guide](CONTR
 
 On the first launch of GlazeWM, a default configuration can optionally be generated.
 
-The [sample configuration](resources/assets/sample-config.yaml) is the source of truth for this fork's default bindings. The inherited cheat sheet below is a general reference; your own configuration can override it.
+The [sample configuration](resources/assets/sample-config.yaml) is the source of truth for this fork's default bindings. The cheat sheet below includes Feeling's desktop toggle; your own configuration can override these bindings.
 
 ![Infographic](/resources/assets/cheatsheet.png)
+
+**Alt + Shift + M** (`wm-toggle-desktop`) shows the desktop while GlazeWM
+is active: press once to hide managed windows on the visible workspaces,
+and again to restore the same layout, sizes, floating/fullscreen states and focus.
+Previously minimized windows remain minimized. Opening a new application,
+activating a hidden window from the taskbar, or using another WM command
+restores the desktop before continuing. The saved layout lasts for the
+current running session.
+It is disabled when the tray's **Active** option is off (paused).
+To change the shortcut, edit `bindings` in your
+`%USERPROFILE%\.glzr\glazewm\config.yaml`, then reload with **Alt + Shift + R**.
+Existing configurations can add this entry under `keybindings`:
+
+```yaml
+  - commands: ["wm-toggle-desktop"]
+    bindings: ["alt+shift+m"]
+```
 
 ## Config documentation
 
