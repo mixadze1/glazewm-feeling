@@ -1156,27 +1156,13 @@ fn redraw_containers(
       }
     }
 
-    // Mark fullscreen windows as fullscreen on every redraw (including
-    // during animations) to ensure browser fullscreen APIs work
-    // correctly.
-    let is_transitioning_fullscreen =
-      match (window.prev_state(), window.state()) {
-        (Some(_), WindowState::Fullscreen(s)) if !s.maximized => true,
-        (Some(WindowState::Fullscreen(_)), _) => true,
-        _ => false,
-      };
-
-    let is_currently_fullscreen =
-      matches!(window.state(), WindowState::Fullscreen(_));
-
-    if is_currently_fullscreen {
-      if let Err(err) = window.native().mark_fullscreen(true) {
-        warn!("Failed to mark window as fullscreen: {}", err);
-      }
-    } else if is_transitioning_fullscreen {
-      if let Err(err) = window.native().mark_fullscreen(false) {
-        warn!("Failed to unmark window as fullscreen: {}", err);
-      }
+    // Keep the taskbar's fullscreen hint in sync, including transitions
+    // between maximized and borderless fullscreen.
+    let is_currently_fullscreen = matches!(window.state(), WindowState::Fullscreen(ref s) if !s.maximized);
+    if let Err(err) =
+      window.native().mark_fullscreen(is_currently_fullscreen)
+    {
+      warn!("Failed to update window fullscreen hint: {}", err);
     }
 
     // Skip setting taskbar visibility if the window is hidden (has no
@@ -1418,11 +1404,19 @@ fn reposition_window(
           if fullscreen.maximized
             && window.native().has_window_style(WS_MAXIMIZEBOX) =>
         {
+          // Let Windows choose the maximized frame, as with the title-bar
+          // button. Overwriting it with monitor bounds covers the taskbar
+          // and disagrees with the application's native maximized state.
+          let on_target_monitor =
+            rect.contains_point(&window.native().frame()?.center_point());
+          if !on_target_monitor {
+            window.native().restore(Some(rect))?;
+            window.native().maximize()?;
+          }
           if !window.native().is_maximized()? {
             window.native().maximize()?;
           }
-
-          window.native().set_window_pos(z_order, rect, swp_flags)?;
+          window.native().set_z_order(z_order)?;
         }
         _ => {
           swp_flags |= SWP_FRAMECHANGED;
@@ -1554,7 +1548,9 @@ fn apply_border_effect(
   effect_config: &WindowEffectConfig,
   state: &WmState,
 ) {
-  let border_color = if effect_config.border.enabled {
+  let border_color = if effect_config.border.enabled
+    && !matches!(window.state(), WindowState::Fullscreen(_))
+  {
     Some(&effect_config.border.color)
   } else {
     None
@@ -1573,7 +1569,13 @@ fn apply_border_effect(
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let current_generation = generation.lock().unwrap();
     if *current_generation == expected_generation {
-      _ = native.set_border_color(border_color.as_ref());
+      // Native maximize may precede its state-change notification.
+      let color = if native.is_maximized().unwrap_or(false) {
+        None
+      } else {
+        border_color.as_ref()
+      };
+      _ = native.set_border_color(color);
     }
   });
 }

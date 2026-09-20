@@ -1,5 +1,5 @@
 use tracing::info;
-use wm_common::{DisplayState, HideMethod};
+use wm_common::{DisplayState, HideMethod, WindowState};
 use wm_platform::NativeWindow;
 
 use crate::{
@@ -15,6 +15,13 @@ pub fn handle_window_shown(
   let found_window = state.window_from_native(&native_window);
 
   if let Some(window) = found_window {
+    if window.state() == WindowState::Minimized {
+      return super::handle_window_minimize_ended(
+        &native_window,
+        state,
+        config,
+      );
+    }
     info!("Window shown: {window}");
 
     // Update display state if window is already managed.

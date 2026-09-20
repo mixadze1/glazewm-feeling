@@ -19,6 +19,13 @@ pub fn handle_window_focused(
   state: &mut WmState,
   config: &mut UserConfig,
 ) -> anyhow::Result<()> {
+  #[cfg(target_os = "windows")]
+  if crate::commands::window::is_task_manager_window(native_window) {
+    // Keep manual OS focus usable, without adopting it into WM focus or
+    // overriding it through the recent-close/minimize focus correction.
+    state.is_focus_synced = false;
+    return Ok(());
+  }
   let found_window = state.window_from_native(native_window);
   let focused_container =
     state.focused_container().context("No focused container.")?;

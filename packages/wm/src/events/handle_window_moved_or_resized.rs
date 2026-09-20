@@ -77,6 +77,17 @@ pub fn handle_window_moved_or_resized(
       return update_drag_state(&window, &frame_position, state, config);
     }
 
+    // Restore notifications can arrive after location events (or be
+    // omitted). Re-tile before fullscreen detection interprets the
+    // restored placement.
+    if window.state() == WindowState::Minimized {
+      return super::handle_window_minimize_ended(
+        native_window,
+        state,
+        config,
+      );
+    }
+
     let old_is_maximized = window.native_properties().is_maximized;
     let is_maximized = try_warn!(window.native().is_maximized());
 

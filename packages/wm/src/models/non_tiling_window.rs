@@ -148,12 +148,16 @@ impl_window_getters!(NonTilingWindow);
 impl PositionGetters for NonTilingWindow {
   fn to_rect(&self) -> anyhow::Result<Rect> {
     match self.state() {
-      WindowState::Fullscreen(_) => {
+      WindowState::Fullscreen(_fullscreen) => {
         let monitor = self.monitor().context("No monitor.")?;
 
         #[cfg(target_os = "windows")]
         {
-          monitor.to_rect()
+          if _fullscreen.maximized {
+            Ok(monitor.native_properties().working_area)
+          } else {
+            monitor.to_rect()
+          }
         }
         #[cfg(target_os = "macos")]
         {
@@ -164,5 +168,39 @@ impl PositionGetters for NonTilingWindow {
       }
       _ => Ok(self.floating_placement()),
     }
+  }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+  use wm_common::FullscreenStateConfig;
+
+  use super::*;
+  use crate::models::Monitor;
+
+  #[test]
+  fn maximized_window_uses_work_area_and_fullscreen_uses_monitor() {
+    let window = NonTilingWindow::mock()
+      .state(WindowState::Fullscreen(FullscreenStateConfig {
+        maximized: true,
+        shown_on_top: false,
+      }))
+      .call();
+    let workspace = crate::models::Workspace::mock()
+      .non_tiling_windows(vec![window.clone()])
+      .call();
+    let bounds = Rect::from_xy(100, 0, 1920, 1080);
+    let work_area = Rect::from_xy(100, 0, 1920, 1040);
+    let _monitor = Monitor::mock()
+      .bounds(bounds.clone())
+      .working_area(work_area.clone())
+      .workspaces(vec![workspace])
+      .call();
+    assert_eq!(window.to_rect().unwrap(), work_area);
+    window.set_state(WindowState::Fullscreen(FullscreenStateConfig {
+      maximized: false,
+      shown_on_top: false,
+    }));
+    assert_eq!(window.to_rect().unwrap(), bounds);
   }
 }

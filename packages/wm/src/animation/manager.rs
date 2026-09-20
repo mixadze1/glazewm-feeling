@@ -536,6 +536,9 @@ impl AnimationManager {
   /// already at their final positions by the time this is called).
   #[cfg(target_os = "windows")]
   pub fn drain_all_sessions(&mut self) -> Vec<ResizeSession> {
+    self.animations.clear();
+    self.slide_in_monitor_rects.clear();
+    self.animation_timer_running.store(false, Ordering::Relaxed);
     let mut sessions: Vec<ResizeSession> =
       self.resize_sessions.drain().map(|(_, s)| s).collect();
     sessions
@@ -558,6 +561,30 @@ impl AnimationManager {
     // their final positions, so tearing it down simply reveals them.
     self.iris_switch = None;
     sessions
+  }
+
+  /// Finish accepted close requests and release every visual before
+  /// pausing.
+  pub fn finish_for_pause(&mut self) {
+    self.animation_timer_running.store(false, Ordering::Relaxed);
+    #[cfg(target_os = "windows")]
+    {
+      let closing: Vec<_> = self.pending_close_windows.drain().collect();
+      for (id, handle) in closing {
+        self.remove_animation(&id);
+        let native = NativeWindow::from_handle(handle);
+        let _ = native.set_cloaked(false);
+        if let Err(err) = native.close() {
+          tracing::warn!("Failed to finish close on pause: {err}");
+        }
+      }
+      for session in self.drain_all_sessions() {
+        if let Err(err) = session.commit() {
+          tracing::warn!("Failed to finish animation on pause: {err}");
+        }
+      }
+    }
+    self.animations.clear();
   }
 
   /// Starts a ticking phase of the persistent animation timer thread.
@@ -829,7 +856,8 @@ impl AnimationManager {
     state: &mut WmState,
     config: &UserConfig,
   ) -> anyhow::Result<()> {
-    if !state.animation_manager.has_active_animations() {
+    if state.is_paused || !state.animation_manager.has_active_animations()
+    {
       return Ok(());
     }
 
@@ -2368,6 +2396,75 @@ impl AnimationManager {
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
   use super::*;
+
+  #[tokio::test]
+  async fn timer_restarts_after_repeated_pause_and_idle() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let mut manager = AnimationManager::new(tx);
+    for _ in 0..20 {
+      manager.finish_for_pause();
+      // Let the persistent timer park and discard any last in-flight tick.
+      tokio::time::sleep(Duration::from_millis(30)).await;
+      while rx.try_recv().is_ok() {}
+      manager.start_animation(
+        Uuid::new_v4(),
+        WindowAnimationState::new_movement(
+          Rect::from_xy(0, 0, 600, 400),
+          Rect::from_xy(800, 0, 600, 400),
+          500,
+          EasingFunction::default(),
+        ),
+      );
+      manager.ensure_timer_running();
+      assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+          .await
+          .unwrap(),
+        Some(())
+      );
+    }
+    manager.finish_for_pause();
+  }
+
+  #[test]
+  fn repeated_pause_discards_old_frames_and_accepts_new_animations() {
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let mut manager = AnimationManager::new(tx);
+    for _ in 0..20 {
+      let id = Uuid::new_v4();
+      manager.animations.insert(
+        id,
+        WindowAnimationState::new_movement(
+          Rect::from_xy(0, 0, 600, 400),
+          Rect::from_xy(800, 0, 600, 400),
+          500,
+          EasingFunction::default(),
+        ),
+      );
+      manager.workspace_switch =
+        Some(workspace_switch([id, Uuid::new_v4()]));
+      manager.pending_ws_cleanup =
+        Some(workspace_switch([id, Uuid::new_v4()]));
+      manager
+        .pending_surrogate_updates
+        .push(PendingSurrogateUpdate {
+          window_id: id,
+          rect: Rect::from_xy(0, 0, 600, 400),
+          opacity: 255,
+          handoff: true,
+        });
+      manager
+        .animation_timer_running
+        .store(true, Ordering::Relaxed);
+      assert!(manager.has_active_animations());
+      manager.finish_for_pause();
+      manager.finish_for_pause();
+      assert!(!manager.has_active_animations());
+      assert!(manager.pending_surrogate_updates.is_empty());
+      assert!(manager.pending_ws_cleanup.is_none());
+      assert!(!manager.animation_timer_running.load(Ordering::Relaxed));
+    }
+  }
 
   fn workspace_switch(ids: [Uuid; 2]) -> WorkspaceSwitchState {
     WorkspaceSwitchState {

@@ -88,6 +88,25 @@ pub fn handle_mouse_move(
       return Ok(());
     }
 
+    #[cfg(target_os = "windows")]
+    {
+      use crate::traits::WindowGetters;
+      // WinEvent hooks skip our own process, including the tray menu's
+      // foreground window. The cached flag can therefore still be true
+      // while the user is interacting with that menu.
+      let foreground = state.dispatcher.focused_window()?;
+      let focused = state.focused_container();
+      let owns_focus = focused.as_ref().is_some_and(|container| {
+        container.as_window_container().map_or_else(
+          |_| foreground.is_desktop_window().unwrap_or(false),
+          |window| *window.native() == foreground,
+        )
+      });
+      if !owns_focus {
+        return Ok(());
+      }
+    }
+
     let window_under_cursor = {
       #[cfg(target_os = "macos")]
       {

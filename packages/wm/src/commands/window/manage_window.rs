@@ -112,6 +112,13 @@ fn check_is_manageable(
     return Ok(None);
   }
 
+  // Exclude before cloaking, insertion or focus changes. An ordinary
+  // post-manage ignore rule is too late to avoid disturbing the layout.
+  #[cfg(target_os = "windows")]
+  if super::is_task_manager_window(native_window) {
+    return Ok(None);
+  }
+
   #[cfg(target_os = "macos")]
   {
     use wm_platform::NativeWindowExtMacOs;

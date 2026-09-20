@@ -1,6 +1,14 @@
 use anyhow::Context;
 use wm_common::WindowState;
 
+/// Task Manager remains entirely outside WM layout and focus management.
+#[cfg(target_os = "windows")]
+pub fn is_task_manager_window(window: &wm_platform::NativeWindow) -> bool {
+  window
+    .process_name()
+    .is_ok_and(|name| name.eq_ignore_ascii_case("Taskmgr"))
+}
+
 use crate::{
   commands::container::{
     detach_container, flatten_child_split_containers,

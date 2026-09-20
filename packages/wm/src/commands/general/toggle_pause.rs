@@ -2,9 +2,10 @@ use wm_common::WmEvent;
 #[cfg(target_os = "windows")]
 use wm_platform::NativeWindowWindowsExt;
 
-#[cfg(target_os = "windows")]
-use crate::traits::WindowGetters;
-use crate::wm_state::WmState;
+use crate::{
+  traits::{CommonGetters, WindowGetters},
+  wm_state::WmState,
+};
 
 /// Pauses or unpauses the WM.
 pub fn toggle_pause(state: &mut WmState) {
@@ -15,6 +16,22 @@ pub fn toggle_pause(state: &mut WmState) {
   }
   let is_paused = !state.is_paused;
   state.is_paused = is_paused;
+
+  if is_paused {
+    state.animation_manager.finish_for_pause();
+    state.pending_sync.clear();
+    state.window_target_positions.clear();
+    for window in state.windows() {
+      window.set_active_drag(None);
+      #[cfg(target_os = "windows")]
+      if window
+        .workspace()
+        .is_some_and(|workspace| workspace.is_displayed())
+      {
+        let _ = window.native().set_cloaked(false);
+      }
+    }
+  }
 
   #[cfg(target_os = "windows")]
   if is_paused {
@@ -29,6 +46,7 @@ pub fn toggle_pause(state: &mut WmState) {
 
   // Redraw full container tree on unpause.
   if !is_paused {
+    state.pending_sync.suppress_animations();
     state.pending_sync.queue_all_effects_update();
     state
       .pending_sync
@@ -65,5 +83,6 @@ mod tests {
     toggle_pause(&mut state);
     assert!(!state.is_paused);
     assert!(state.pending_sync.needs_all_effects_update());
+    assert!(state.pending_sync.animations_suppressed());
   }
 }

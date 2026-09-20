@@ -34,6 +34,9 @@ pub fn update_window_state(
   // `window_move` animation across the tiling/floating boundary for this
   // window.
   state.pending_sync.mark_window_state_change(window.id());
+  // Recompute both native borders and the focus outline even when focus
+  // stays on the same window during maximize/restore.
+  state.pending_sync.queue_all_effects_update();
 
   info!("Updating window state: {:?}.", target_state);
 
