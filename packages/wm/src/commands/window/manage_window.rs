@@ -105,7 +105,7 @@ pub fn manage_window(
 ///
 /// Returns `Ok(Some(properties))` if the window is manageable and its
 /// properties were retrieved successfully.
-fn inspect_candidate(
+pub(crate) fn inspect_candidate(
   native_window: &NativeWindow,
 ) -> anyhow::Result<Option<NativeWindowProperties>> {
   if !native_window.is_visible()? {

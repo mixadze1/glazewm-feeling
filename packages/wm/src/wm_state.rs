@@ -87,6 +87,8 @@ pub struct WmState {
   /// desktop is shown so restoring preserves splits, sizes and states.
   #[cfg(target_os = "windows")]
   pub desktop_windows: Option<Vec<NativeWindow>>,
+  #[cfg(target_os = "windows")]
+  pub desktop_animation: Option<crate::commands::general::DesktopAnimation>,
 
   /// Whether the OS focused window is the same as the WM focused window.
   pub is_focus_synced: bool,
@@ -128,6 +130,8 @@ impl WmState {
       is_paused: false,
       #[cfg(target_os = "windows")]
       desktop_windows: None,
+      #[cfg(target_os = "windows")]
+      desktop_animation: None,
       is_focus_synced: false,
       has_initialized: false,
       event_tx,
@@ -717,6 +721,8 @@ impl WmState {
 
 impl Drop for WmState {
   fn drop(&mut self) {
+    #[cfg(target_os = "windows")]
+    { self.desktop_animation = None; }
     // Cancel delayed border writes before restoring native window state.
     // They may otherwise run while shutdown awaits IPC/watcher cleanup.
     #[cfg(target_os = "windows")]

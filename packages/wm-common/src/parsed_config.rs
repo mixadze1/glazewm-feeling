@@ -417,6 +417,8 @@ pub struct WorkspaceConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all(serialize = "camelCase"))]
 pub struct AnimationsConfig {
+  /// Show-desktop hide/restore animation (Windows only).
+  pub desktop_toggle: DesktopToggleConfig,
   /// Animation settings for pure window translations (position changes
   /// only).
   pub window_move: AnimationTypeConfig,
@@ -441,11 +443,44 @@ pub struct AnimationsConfig {
 impl Default for AnimationsConfig {
   fn default() -> Self {
     AnimationsConfig {
+      desktop_toggle: DesktopToggleConfig::default(),
       window_move: AnimationTypeConfig::default(),
       window_resize: WindowResizeConfig::default(),
       window_open: WindowOpenConfig::default(),
       workspace_switch: WorkspaceSwitchAnimationConfig::default(),
       window_close: WindowCloseConfig::default(),
+    }
+  }
+}
+
+/// Animation of the saved desktop layout when hiding or restoring it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all(serialize = "camelCase"))]
+pub struct DesktopToggleConfig {
+  pub enabled: bool,
+  pub hide_duration_ms: u32,
+  pub show_duration_ms: u32,
+  pub easing: EasingFunction,
+  /// Scale at the hidden end; 1.0 disables scaling.
+  pub hidden_scale: f32,
+  /// Screen-pixel displacement at the hidden end.
+  pub offset_x: i32,
+  pub offset_y: i32,
+  /// Opacity fraction at the hidden end; 1.0 disables fading.
+  pub hidden_opacity: f32,
+}
+
+impl Default for DesktopToggleConfig {
+  fn default() -> Self {
+    Self {
+      enabled: true,
+      hide_duration_ms: 220,
+      show_duration_ms: 260,
+      easing: EasingFunction::default(),
+      hidden_scale: 0.94,
+      offset_x: 0,
+      offset_y: 24,
+      hidden_opacity: 0.0,
     }
   }
 }

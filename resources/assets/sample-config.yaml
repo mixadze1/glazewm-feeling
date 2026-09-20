@@ -1,4 +1,17 @@
 animations:
+  # Alt+Shift+M: show desktop / restore the saved layout.
+  desktop_toggle:
+    enabled: true
+    hide_duration_ms: 220
+    show_duration_ms: 260
+    easing: ease_in_out
+    # Scale at the hidden endpoint (0..2); 1 disables zoom.
+    hidden_scale: 0.94
+    # Displacement in screen pixels; 0 disables motion on that axis.
+    offset_x: 0
+    offset_y: 24
+    # Opacity at the hidden endpoint (0..1); 1 disables fading.
+    hidden_opacity: 0.0
   # Animation settings for pure window translations (position changes only).
   window_move:
     enabled: true

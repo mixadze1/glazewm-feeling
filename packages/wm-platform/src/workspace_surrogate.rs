@@ -110,6 +110,34 @@ impl WorkspaceSurrogate {
     self.inner.set_thumbnail_visible(false);
   }
 
+  /// Animate a desktop preview without moving or resizing the real window.
+  /// `visible` is 0 at the hidden endpoint and 1 at the original layout.
+  pub fn update_desktop(
+    &mut self,
+    visible: f32,
+    hidden_scale: f32,
+    offset_x: i32,
+    offset_y: i32,
+  ) {
+    let visible = visible.clamp(0.0, 1.0);
+    let hidden = 1.0 - visible;
+    let scale = hidden_scale + (1.0 - hidden_scale) * visible;
+    let width = (self.rect.width() as f32 * scale).round() as i32;
+    let height = (self.rect.height() as f32 * scale).round() as i32;
+    let left = self.rect.left - self.viewport.left
+      + (self.rect.width() - width) / 2
+      + (offset_x as f32 * hidden).round() as i32;
+    let top = self.rect.top - self.viewport.top
+      + (self.rect.height() - height) / 2
+      + (offset_y as f32 * hidden).round() as i32;
+    self.inner.set_thumbnail_rects(
+      RECT { left: 0, top: 0, right: self.rect.width(), bottom: self.rect.height() },
+      RECT { left, top, right: left + width, bottom: top + height },
+    );
+    self.inner.set_window_opacity(self.lerp_opacity(visible, true));
+    self.inner.set_visible(width > 0 && height > 0);
+  }
+
   /// Shows the surrogate at full opacity with the thumbnail at the
   /// window's natural (unscaled) position within the monitor viewport.
   ///

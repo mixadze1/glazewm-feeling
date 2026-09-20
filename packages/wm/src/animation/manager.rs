@@ -262,6 +262,8 @@ pub enum AnimationPositionResult {
 
 /// Manages animations for all windows.
 pub struct AnimationManager {
+  #[cfg(target_os = "windows")]
+  desktop_animation_active: bool,
   /// Active animations keyed by window ID.
   animations: HashMap<Uuid, WindowAnimationState>,
   /// Sender for animation tick events.
@@ -382,6 +384,8 @@ impl AnimationManager {
   /// Creates a new `AnimationManager`.
   pub fn new(animation_tick_tx: mpsc::UnboundedSender<()>) -> Self {
     Self {
+      #[cfg(target_os = "windows")]
+      desktop_animation_active: false,
       animations: HashMap::new(),
       animation_tick_tx,
       animation_timer_running: Arc::new(AtomicBool::new(false)),
@@ -504,6 +508,10 @@ impl AnimationManager {
   /// Whether there are any active animations or a workspace-switch in
   /// flight.
   pub fn has_active_animations(&self) -> bool {
+    #[cfg(target_os = "windows")]
+    if self.desktop_animation_active {
+      return true;
+    }
     if !self.animations.is_empty() {
       return true;
     }
@@ -536,6 +544,7 @@ impl AnimationManager {
   /// already at their final positions by the time this is called).
   #[cfg(target_os = "windows")]
   pub fn drain_all_sessions(&mut self) -> Vec<ResizeSession> {
+    self.desktop_animation_active = false;
     self.animations.clear();
     self.slide_in_monitor_rects.clear();
     self.animation_timer_running.store(false, Ordering::Relaxed);
@@ -629,6 +638,16 @@ impl AnimationManager {
           *guard = Some(handle);
         }
       }
+    }
+  }
+
+  #[cfg(target_os = "windows")]
+  pub fn set_desktop_animation_active(&mut self, active: bool) {
+    self.desktop_animation_active = active;
+    if active {
+      self.ensure_timer_running();
+    } else if !self.has_active_animations() {
+      self.animation_timer_running.store(false, Ordering::Relaxed);
     }
   }
 

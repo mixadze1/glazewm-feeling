@@ -134,6 +134,33 @@ The [default config](resources/assets/sample-config.yaml) file is generated at `
 
 ### Feeling animations
 
+The desktop toggle has its own animation settings. It fades, scales and
+offsets window previews while preserving the real layout. Pressing the
+shortcut again during the transition reverses it from its current position.
+Merge this block into your existing `animations` section:
+
+```yaml
+animations:
+  desktop_toggle:
+    enabled: true
+    hide_duration_ms: 220
+    show_duration_ms: 260
+    easing: ease_in_out
+    hidden_scale: 0.94
+    offset_x: 0
+    offset_y: 24
+    hidden_opacity: 0.0
+```
+
+`hidden_scale` is the scale at the hidden end (0–2; `1` disables scaling).
+`offset_x` and `offset_y` are screen pixels relative to each window's original
+position; use negative values for left/up and `0` for no displacement.
+`hidden_opacity` ranges from `0` (transparent) to `1` (no fade).
+Set `enabled: false` for an instant toggle, or set either duration to `0`
+to make that direction instant. `easing` accepts the same named curves and
+custom `cubic_bezier(...)` syntax as the other animations. Pausing, switching
+workspaces or issuing another WM command restores windows immediately.
+
 Merge these settings into your existing configuration rather than replacing it:
 
 ```yaml

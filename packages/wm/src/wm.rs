@@ -103,15 +103,18 @@ impl WindowManager {
           {
             return Ok(());
           }
-          crate::commands::general::toggle_desktop(state, config)?;
+          crate::commands::general::restore_desktop(state)?;
         }
         PlatformEvent::Window(WindowEvent::Shown { window, .. })
-          if state.window_from_native(window).is_none() =>
+          if state.window_from_native(window).is_none()
+            && !state.ignored_windows.contains(window)
+            && crate::commands::window::inspect_candidate(window)
+              .ok().flatten().is_some() =>
         {
-          crate::commands::general::toggle_desktop(state, config)?;
+          crate::commands::general::restore_desktop(state)?;
         }
         PlatformEvent::DisplaySettingsChanged => {
-          crate::commands::general::toggle_desktop(state, config)?;
+          crate::commands::general::restore_desktop(state)?;
         }
         PlatformEvent::Window(WindowEvent::Destroyed { .. })
         | PlatformEvent::Window(WindowEvent::TitleChanged { .. })
@@ -274,6 +277,8 @@ impl WindowManager {
     config: &UserConfig,
   ) -> anyhow::Result<()> {
     use crate::animation::AnimationManager;
+    #[cfg(target_os = "windows")]
+    crate::commands::general::tick_desktop_animation(&mut self.state, config)?;
     // Access animation_manager through state to avoid double borrow
     AnimationManager::tick(&mut self.state, config)
   }
@@ -364,7 +369,7 @@ impl WindowManager {
     if state.desktop_windows.is_some()
       && *command != InvokeCommand::WmToggleDesktop
     {
-      crate::commands::general::toggle_desktop(state, config)?;
+      crate::commands::general::restore_desktop(state)?;
     }
 
     if subject_container.is_detached() {
