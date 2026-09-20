@@ -25,11 +25,11 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct SplitContainer(Rc<RefCell<SplitContainerInner>>);
+pub struct SplitContainer(pub(super) Rc<RefCell<SplitContainerInner>>);
 
-struct SplitContainerInner {
+pub(super) struct SplitContainerInner {
   id: Uuid,
-  parent: Option<Container>,
+  parent: Option<super::WeakContainer>,
   children: VecDeque<Container>,
   child_focus_order: VecDeque<Uuid>,
   tiling_size: f32,

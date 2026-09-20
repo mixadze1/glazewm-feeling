@@ -21,12 +21,12 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct Workspace(Rc<RefCell<WorkspaceInner>>);
+pub struct Workspace(pub(super) Rc<RefCell<WorkspaceInner>>);
 
 #[derive(Debug)]
-struct WorkspaceInner {
+pub(super) struct WorkspaceInner {
   id: Uuid,
-  parent: Option<Container>,
+  parent: Option<super::WeakContainer>,
   children: VecDeque<Container>,
   child_focus_order: VecDeque<Uuid>,
   config: WorkspaceConfig,

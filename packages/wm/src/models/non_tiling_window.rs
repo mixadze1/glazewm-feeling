@@ -23,11 +23,11 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct NonTilingWindow(Rc<RefCell<NonTilingWindowInner>>);
+pub struct NonTilingWindow(pub(super) Rc<RefCell<NonTilingWindowInner>>);
 
-struct NonTilingWindowInner {
+pub(super) struct NonTilingWindowInner {
   id: Uuid,
-  parent: Option<Container>,
+  parent: Option<super::WeakContainer>,
   children: VecDeque<Container>,
   child_focus_order: VecDeque<Uuid>,
   native: NativeWindow,

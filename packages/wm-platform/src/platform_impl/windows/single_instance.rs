@@ -29,6 +29,9 @@ impl SingleInstance {
 
     if let Err(err) = unsafe { GetLastError() } {
       if err == ERROR_ALREADY_EXISTS.into() {
+        // CreateMutexW returns an owned handle even when it already
+        // exists.
+        let _ = unsafe { CloseHandle(handle) };
         return Err(crate::Error::Platform(
           "Another instance of the application is already running."
             .to_string(),
@@ -48,8 +51,11 @@ impl SingleInstance {
 
     // If the mutex exists, then another instance is running.
     match res {
-      Ok(_) => false,
-      Err(err) => err == ERROR_FILE_NOT_FOUND.into(),
+      Ok(handle) => {
+        let _ = unsafe { CloseHandle(handle) };
+        true
+      }
+      Err(err) => err != ERROR_FILE_NOT_FOUND.into(),
     }
   }
 }

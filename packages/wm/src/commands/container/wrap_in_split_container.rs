@@ -51,13 +51,13 @@ pub fn wrap_in_split_container(
     .collect::<VecDeque<_>>();
 
   // Set the split container's parent and tiling size.
-  *split_container.borrow_parent_mut() = Some(target_parent.clone());
+  *split_container.borrow_parent_mut() = Some(target_parent.downgrade());
   split_container.set_tiling_size(total_tiling_size);
 
   // Move the children from their original parent to the split container.
   for target_child in target_children {
     *target_child.borrow_parent_mut() =
-      Some(split_container.clone().into());
+      Some(split_container.as_container().downgrade());
 
     split_container
       .borrow_children_mut()

@@ -61,6 +61,23 @@ mod tests {
   use super::*;
 
   #[test]
+  fn shutdown_invalidates_delayed_border_updates() {
+    let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
+    let (exit_tx, _) = tokio::sync::mpsc::unbounded_channel();
+    let (tick_tx, _) = tokio::sync::mpsc::unbounded_channel();
+    let state = WmState::new(
+      wm_platform::Dispatcher::mock(),
+      event_tx,
+      exit_tx,
+      tick_tx,
+    );
+    let generation = state.border_effect_generation.clone();
+    let before = *generation.lock().unwrap();
+    drop(state);
+    assert_ne!(*generation.lock().unwrap(), before);
+  }
+
+  #[test]
   fn pause_invalidates_delayed_borders_and_resume_restores_effects() {
     let (event_tx, _events) = tokio::sync::mpsc::unbounded_channel();
     let (exit_tx, _) = tokio::sync::mpsc::unbounded_channel();

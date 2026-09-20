@@ -2,7 +2,11 @@ use std::{
   fmt::{self, Display},
   path::Path,
   str::FromStr,
-  sync::{Arc, Mutex},
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+  },
+  time::Duration,
 };
 
 use anyhow::Context;
@@ -64,7 +68,8 @@ impl FromStr for TrayMenuId {
 pub struct SystemTray {
   pub command_rx: mpsc::UnboundedReceiver<InvokeCommand>,
   pub exit_rx: mpsc::UnboundedReceiver<()>,
-  _icon_thread: Option<std::thread::JoinHandle<()>>,
+  icon_thread: Option<std::thread::JoinHandle<()>>,
+  stopping: Arc<AtomicBool>,
   _tray_icon: ThreadBound<TrayIcon>,
   active_item: ThreadBound<CheckMenuItem>,
 }
@@ -111,10 +116,20 @@ impl SystemTray {
 
     // Spawn thread to handle tray menu events.
     let config_path = config_path.to_owned();
+    let stopping = Arc::new(AtomicBool::new(false));
+    let thread_stopping = stopping.clone();
     let icon_thread = std::thread::spawn(move || {
       let menu_event_rx = MenuEvent::receiver();
 
-      while let Ok(event) = menu_event_rx.recv() {
+      while !thread_stopping.load(Ordering::Acquire) {
+        let Ok(event) =
+          menu_event_rx.recv_timeout(Duration::from_millis(50))
+        else {
+          continue;
+        };
+        if thread_stopping.load(Ordering::Acquire) {
+          break;
+        }
         if let Ok(menu_event) = TrayMenuId::from_str(event.id.as_ref()) {
           if let Err(err) = Self::handle_menu_event(
             &menu_event,
@@ -134,7 +149,8 @@ impl SystemTray {
     Ok(Self {
       command_rx,
       exit_rx,
-      _icon_thread: Some(icon_thread),
+      icon_thread: Some(icon_thread),
+      stopping,
       _tray_icon: tray_icon,
       active_item,
     })
@@ -330,6 +346,19 @@ impl SystemTray {
       TrayMenuId::Exit => {
         exit_tx.send(())?;
         Ok(())
+      }
+    }
+  }
+}
+
+impl Drop for SystemTray {
+  fn drop(&mut self) {
+    // The global menu channel never closes. Stop and join the worker while
+    // the dispatcher is still running, before destroying the tray icon.
+    self.stopping.store(true, Ordering::Release);
+    if let Some(thread) = self.icon_thread.take() {
+      if thread.join().is_err() {
+        tracing::warn!("Tray event thread panicked during shutdown.");
       }
     }
   }

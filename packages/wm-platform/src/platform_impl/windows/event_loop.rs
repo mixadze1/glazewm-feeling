@@ -3,7 +3,7 @@ use std::{
   collections::HashMap,
   sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
   },
   thread::{self, ThreadId},
 };
@@ -25,16 +25,20 @@ use windows::{
 
 use crate::{DispatchFn, Dispatcher, WndProcCallback};
 
+type PendingDispatches =
+  Arc<Mutex<Option<HashMap<usize, Box<DispatchFn>>>>>;
+
 thread_local! {
   /// Custom message ID for dispatching closures to be run on the event
   /// loop thread.
   ///
-  /// `WPARAM` contains a `Box<Box<dyn FnOnce()>>` that must be retrieved
-  /// with `Box::from_raw`. `LPARAM` is unused.
+  /// Async messages carry a queue ID. Sync messages (LPARAM = 1) borrow
+  /// an Option<Box<dyn FnOnce() + Send>> for the duration of SendMessageW.
   ///
   /// This message is sent using `PostMessageW` and handled in
   /// [`EventLoop::window_proc`].
   static WM_DISPATCH_CALLBACK: u32 = unsafe { RegisterWindowMessageW(w!("GlazeWM:Dispatch")) };
+  static PENDING_DISPATCHES: RefCell<HashMap<isize, PendingDispatches>> = RefCell::new(HashMap::new());
 
   /// Registered callbacks that pre-process messages in the event loop's
   /// window procedure.
@@ -51,6 +55,7 @@ pub(crate) struct EventLoopSource {
   pub(crate) thread_id: ThreadId,
   os_thread_id: u32,
   next_callback_id: Arc<AtomicUsize>,
+  pending_dispatches: PendingDispatches,
 }
 
 impl EventLoopSource {
@@ -61,27 +66,33 @@ impl EventLoopSource {
   where
     F: FnOnce() + Send + 'static,
   {
-    // Double box the callback to avoid `STATUS_ACCESS_VIOLATION` on
-    // Windows. Ref: https://github.com/tauri-apps/tao/blob/dev/src/platform_impl/windows/event_loop.rs#L596
-    let dispatch_fn: Box<Box<DispatchFn>> =
-      Box::new(Box::new(dispatch_fn));
-
-    // Leak to a raw pointer to then be passed as `WPARAM` in the message.
-    let callback_ptr = Box::into_raw(dispatch_fn);
+    let id = self.next_callback_id.fetch_add(1, Ordering::Relaxed);
+    {
+      let mut pending = self.pending_dispatches.lock().unwrap();
+      pending
+        .as_mut()
+        .ok_or(crate::Error::EventLoopStopped)?
+        .insert(id, Box::new(dispatch_fn));
+    }
 
     unsafe {
       if PostMessageW(
         HWND(self.message_window_handle),
         WM_DISPATCH_CALLBACK.with(|v| *v),
-        WPARAM(callback_ptr as _),
+        WPARAM(id),
         LPARAM(0),
       )
       .is_ok()
       {
         Ok(())
       } else {
-        // If `PostMessage` fails, we need to clean up the callback.
-        let _ = Box::from_raw(callback_ptr);
+        let callback = self
+          .pending_dispatches
+          .lock()
+          .unwrap()
+          .as_mut()
+          .and_then(|pending| pending.remove(&id));
+        drop(callback);
         Err(crate::Error::WindowMessage(
           "Failed to post message".to_string(),
         ))
@@ -89,7 +100,6 @@ impl EventLoopSource {
     }
   }
 
-  #[allow(clippy::unnecessary_wraps)]
   pub(crate) fn send_dispatch_sync<F>(
     &self,
     dispatch_fn: F,
@@ -97,9 +107,8 @@ impl EventLoopSource {
   where
     F: FnOnce() + Send,
   {
-    let dispatch_fn: Box<Box<dyn FnOnce() + Send>> =
-      Box::new(Box::new(dispatch_fn));
-    let callback_ptr = Box::into_raw(dispatch_fn);
+    let mut dispatch_fn: Option<Box<dyn FnOnce() + Send + '_>> =
+      Some(Box::new(dispatch_fn));
 
     // `SendMessageW` blocks the calling thread until the window procedure
     // processes the message and executes the closure. This guarantees the
@@ -108,12 +117,16 @@ impl EventLoopSource {
       SendMessageW(
         HWND(self.message_window_handle),
         WM_DISPATCH_CALLBACK.with(|v| *v),
-        WPARAM(callback_ptr as _),
-        LPARAM(0),
+        WPARAM(std::ptr::from_mut(&mut dispatch_fn) as usize),
+        LPARAM(1),
       );
     }
 
-    Ok(())
+    if dispatch_fn.is_some() {
+      Err(crate::Error::EventLoopStopped)
+    } else {
+      Ok(())
+    }
   }
 
   pub(crate) fn send_stop(&self) -> crate::Result<()> {
@@ -158,6 +171,7 @@ impl EventLoopSource {
 /// Platform-specific implementation of [`EventLoop`].
 pub(crate) struct EventLoop {
   source: EventLoopSource,
+  stopped: Arc<AtomicBool>,
 }
 
 impl EventLoop {
@@ -172,22 +186,36 @@ impl EventLoop {
       thread_id: thread::current().id(),
       os_thread_id: unsafe { GetCurrentThreadId() },
       next_callback_id: Arc::new(AtomicUsize::new(0)),
+      pending_dispatches: Arc::new(Mutex::new(Some(HashMap::new()))),
     };
+    PENDING_DISPATCHES.with(|queues| {
+      queues
+        .borrow_mut()
+        .insert(window_handle, source.pending_dispatches.clone());
+    });
 
     let stopped = Arc::new(AtomicBool::new(false));
-    let dispatcher = Dispatcher::new(Some(source.clone()), stopped);
+    let dispatcher =
+      Dispatcher::new(Some(source.clone()), stopped.clone());
 
-    Ok((Self { source }, dispatcher))
+    Ok((Self { source, stopped }, dispatcher))
   }
 
   /// Implements [`EventLoop::run`].
   pub(crate) fn run(&self) -> crate::Result<()> {
+    debug_assert_eq!(thread::current().id(), self.source.thread_id);
     tracing::info!("Starting event loop.");
     let mut msg = MSG::default();
 
     // Start the message loop. Blocks until `WM_QUIT` is received.
     loop {
-      if unsafe { GetMessageW(&raw mut msg, None, 0, 0) }.as_bool() {
+      let result = unsafe { GetMessageW(&raw mut msg, None, 0, 0) }.0;
+      if result == -1 {
+        return Err(crate::Error::Platform(
+          "GetMessageW failed.".to_string(),
+        ));
+      }
+      if result != 0 {
         unsafe {
           TranslateMessage(&raw const msg);
           DispatchMessageW(&raw const msg);
@@ -198,16 +226,6 @@ impl EventLoop {
     }
 
     tracing::info!("Event loop thread exiting.");
-    unsafe { DestroyWindow(HWND(self.source.message_window_handle)) }?;
-
-    Ok(())
-  }
-
-  /// Shuts down the event loop gracefully.
-  pub(crate) fn shutdown(&mut self) -> crate::Result<()> {
-    tracing::info!("Shutting down event loop.");
-    self.source.send_stop()?;
-
     Ok(())
   }
 
@@ -261,10 +279,27 @@ impl EventLoop {
   ) -> LRESULT {
     // Handle dispatch callbacks first.
     if msg == WM_DISPATCH_CALLBACK.with(|v| *v) {
-      // Convert the `WPARAM` fn pointer back to a double-boxed function.
-      let dispatch_fn: Box<Box<dyn FnOnce() + Send>> =
-        Box::from_raw(wparam.0 as *mut _);
-      dispatch_fn();
+      if lparam.0 == 1 {
+        // The sending thread owns this slot and is blocked until return.
+        let callback =
+          &mut *(wparam.0 as *mut Option<Box<dyn FnOnce() + Send>>);
+        if let Some(callback) = callback.take() {
+          callback();
+        }
+      } else {
+        let callback = PENDING_DISPATCHES.with(|queues| {
+          queues.borrow().get(&hwnd.0).and_then(|queue| {
+            queue
+              .lock()
+              .unwrap()
+              .as_mut()
+              .and_then(|pending| pending.remove(&wparam.0))
+          })
+        });
+        if let Some(callback) = callback {
+          callback();
+        }
+      }
       return LRESULT(0);
     }
 
@@ -290,8 +325,48 @@ impl EventLoop {
 
 impl Drop for EventLoop {
   fn drop(&mut self) {
-    if let Err(err) = self.shutdown() {
-      tracing::warn!("Failed to shut down event loop: {err}");
+    self.stopped.store(true, Ordering::SeqCst);
+    // Release queued closures even if run() was never called. Taking the
+    // map closes the queue and breaks closures capturing their dispatcher.
+    let pending = self.source.pending_dispatches.lock().unwrap().take();
+    drop(pending);
+    PENDING_DISPATCHES.with(|queues| {
+      queues
+        .borrow_mut()
+        .remove(&self.source.message_window_handle);
+    });
+    WNDPROC_CALLBACKS.with(|callbacks| callbacks.borrow_mut().clear());
+    if let Err(err) =
+      unsafe { DestroyWindow(HWND(self.source.message_window_handle)) }
+    {
+      tracing::warn!("Failed to destroy event loop window: {err}");
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use windows::Win32::UI::WindowsAndMessaging::IsWindow;
+
+  use super::*;
+
+  #[test]
+  fn dropping_unstarted_loop_releases_queued_closures_and_window() {
+    let (event_loop, _) = EventLoop::new().unwrap();
+    let source = event_loop.source.clone();
+    let capture = Arc::new(());
+    let weak = Arc::downgrade(&capture);
+    let captured_source = source.clone();
+    source
+      .send_dispatch_async(move || drop((capture, captured_source)))
+      .unwrap();
+    assert!(weak.upgrade().is_some());
+    drop(event_loop);
+    assert!(weak.upgrade().is_none());
+    assert!(
+      !unsafe { IsWindow(HWND(source.message_window_handle)) }.as_bool()
+    );
+    assert!(source.send_dispatch_async(|| {}).is_err());
+    assert!(source.send_dispatch_sync(|| {}).is_err());
   }
 }

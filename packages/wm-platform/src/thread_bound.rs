@@ -19,9 +19,9 @@ use crate::Dispatcher;
 /// - `dispatch2::MainThreadBound` <https://github.com/madsmtm/objc2/tree/main/crates/dispatch2>
 ///
 /// NOTE: Dropping the wrapper schedules the inner value to be dropped on
-/// the event loop thread. If the event loop has already stopped, the drop
-/// is skipped to avoid running `T`'s destructor on the wrong thread,
-/// potentially leaking the value.
+/// the event loop thread. Destruction on the owning thread works even
+/// after the loop stops. If dropped on another thread after shutdown,
+/// the value cannot be safely destroyed and may leak.
 ///
 /// # Example usage
 ///
@@ -187,6 +187,12 @@ impl<T> Drop for ThreadBound<T> {
   )]
   fn drop(&mut self) {
     if mem::needs_drop::<T>() {
+      if std::thread::current().id() == self.thread_id {
+        // SAFETY: This is the thread that created the value. No live
+        // dispatcher is needed to destroy it locally.
+        unsafe { ManuallyDrop::drop(&mut self.value) };
+        return;
+      }
       // TODO: This is pretty cursed. Should be a better way.
       let value_ptr =
         std::ptr::from_mut::<ManuallyDrop<T>>(&mut self.value) as usize;
@@ -198,5 +204,23 @@ impl<T> Drop for ThreadBound<T> {
         ManuallyDrop::drop(&mut *(value_ptr as *mut ManuallyDrop<T>));
       });
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::Arc;
+
+  use super::*;
+
+  #[test]
+  fn owner_thread_releases_value_after_event_loop_is_dropped() {
+    let (event_loop, dispatcher) = crate::EventLoop::new().unwrap();
+    let value = Arc::new(());
+    let weak = Arc::downgrade(&value);
+    let bound = ThreadBound::new(value, dispatcher);
+    drop(event_loop);
+    drop(bound);
+    assert!(weak.upgrade().is_none());
   }
 }

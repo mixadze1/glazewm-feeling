@@ -34,7 +34,7 @@ pub fn attach_container(
     .borrow_child_focus_order_mut()
     .push_back(child.id());
 
-  *child.borrow_parent_mut() = Some(target_parent.clone());
+  *child.borrow_parent_mut() = Some(target_parent.downgrade());
 
   // Resize the child and its siblings if it is a tiling container.
   if let Ok(child) = child.as_tiling_container() {

@@ -20,11 +20,11 @@ use crate::{
 
 /// Root node of the container tree.
 #[derive(Clone)]
-pub struct RootContainer(Rc<RefCell<RootContainerInner>>);
+pub struct RootContainer(pub(super) Rc<RefCell<RootContainerInner>>);
 
-struct RootContainerInner {
+pub(super) struct RootContainerInner {
   id: Uuid,
-  parent: Option<Container>,
+  parent: Option<super::WeakContainer>,
   children: VecDeque<Container>,
   child_focus_order: VecDeque<Uuid>,
 }

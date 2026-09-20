@@ -19,7 +19,7 @@ pub fn flatten_split_container(
 
   let updated_children =
     split_container.children().into_iter().inspect(|child| {
-      *child.borrow_parent_mut() = Some(parent.clone());
+      *child.borrow_parent_mut() = Some(parent.downgrade());
 
       // Resize tiling children to fit the size of the split container.
       if let Ok(tiling_child) = child.as_tiling_container() {

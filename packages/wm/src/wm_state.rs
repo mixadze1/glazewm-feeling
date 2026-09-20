@@ -717,6 +717,13 @@ impl WmState {
 
 impl Drop for WmState {
   fn drop(&mut self) {
+    // Cancel delayed border writes before restoring native window state.
+    // They may otherwise run while shutdown awaits IPC/watcher cleanup.
+    #[cfg(target_os = "windows")]
+    {
+      let mut generation = self.border_effect_generation.lock().unwrap();
+      *generation = generation.wrapping_add(1);
+    }
     // Commit all active resize sessions before cleaning up windows so that
     // surrogate overlays are destroyed and windows are moved to their
     // target positions. This prevents invisible or mispositioned

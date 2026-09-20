@@ -82,7 +82,7 @@ impl KeyEvent {
 /// A system-wide low-level keyboard hook.
 #[derive(Debug)]
 pub struct KeyboardHook {
-  handle: HHOOK,
+  handle: Option<HHOOK>,
   dispatcher: Dispatcher,
 }
 
@@ -104,42 +104,50 @@ impl KeyboardHook {
     F: Fn(KeyEvent) -> bool + Send + Sync + 'static,
   {
     let handle = dispatcher.dispatch_sync(move || {
-      HOOK.with(|state| {
-        assert!(
-          state.take().is_none(),
-          "Only one keyboard hook can be registered on the dispatcher's thread."
-        );
-
-        state.set(Some(Box::new(callback)));
+      let occupied = HOOK.with(|state| {
+        let previous = state.take();
+        let occupied = previous.is_some();
+        state.set(previous);
+        occupied
       });
-
-      unsafe {
+      if occupied {
+        return Err(crate::Error::Platform(
+          "Keyboard hook already registered.".to_string(),
+        ));
+      }
+      let handle = unsafe {
         SetWindowsHookExW(
           WH_KEYBOARD_LL,
           Some(Self::hook_proc),
           HINSTANCE::default(),
           0,
         )
-      }
+      }?;
+      // Store the captured callback only after the native hook succeeds.
+      HOOK.with(|state| state.set(Some(Box::new(callback))));
+      Ok::<_, crate::Error>(handle)
     })??;
 
     Ok(Self {
-      handle,
+      handle: Some(handle),
       dispatcher: dispatcher.clone(),
     })
   }
 
   /// Terminates the keyboard hook by unregistering it.
   pub fn terminate(&mut self) -> crate::Result<()> {
-    unsafe { UnhookWindowsHookEx(self.handle) }?;
-
-    // Dispatch cleanup to the event loop thread since the callback
-    // is stored in a thread-local on that thread.
-    let _ = self.dispatcher.dispatch_async(|| {
+    let Some(handle) = self.handle else {
+      return Ok(());
+    };
+    // Complete cleanup on the owning thread before permitting recreation.
+    self.dispatcher.dispatch_sync(move || {
+      unsafe { UnhookWindowsHookEx(handle) }?;
       HOOK.with(|state| {
         state.take();
       });
-    });
+      Ok::<_, crate::Error>(())
+    })??;
+    self.handle = None;
 
     Ok(())
   }
@@ -198,5 +206,33 @@ impl KeyboardHook {
 impl Drop for KeyboardHook {
   fn drop(&mut self) {
     let _ = self.terminate();
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::Arc;
+
+  use super::*;
+
+  #[test]
+  fn terminating_keyboard_hook_releases_capture_and_allows_recreation() {
+    let (_event_loop, dispatcher) = crate::EventLoop::new().unwrap();
+    for _ in 0..10 {
+      let capture = Arc::new(());
+      let weak = Arc::downgrade(&capture);
+      let mut hook = KeyboardHook::new(
+        move |_| {
+          let _ = &capture;
+          false
+        },
+        &dispatcher,
+      )
+      .unwrap();
+      assert!(KeyboardHook::new(|_| false, &dispatcher).is_err());
+      hook.terminate().unwrap();
+      hook.terminate().unwrap();
+      assert!(weak.upgrade().is_none());
+    }
   }
 }

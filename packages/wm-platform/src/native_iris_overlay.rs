@@ -320,7 +320,10 @@ impl NativeIrisOverlay {
       // here. `bRedraw = FALSE`: the snapshot is static, so only the
       // compositor needs to update the newly-exposed area, not the
       // window's own pixels.
-      SetWindowRgn(HWND(self.hwnd), region, BOOL(0));
+      if SetWindowRgn(HWND(self.hwnd), region, BOOL(0)) == 0 {
+        // Ownership transfers only on success.
+        let _ = DeleteObject(HGDIOBJ(region.0));
+      }
     }
   }
 }

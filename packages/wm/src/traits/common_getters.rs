@@ -8,7 +8,7 @@ use uuid::Uuid;
 use wm_common::ContainerDto;
 
 use crate::models::{
-  Container, DirectionContainer, Monitor, TilingContainer,
+  Container, DirectionContainer, Monitor, TilingContainer, WeakContainer,
   WindowContainer, Workspace,
 };
 
@@ -27,9 +27,9 @@ pub trait CommonGetters {
 
   fn to_dto(&self) -> anyhow::Result<ContainerDto>;
 
-  fn borrow_parent(&self) -> Ref<'_, Option<Container>>;
+  fn borrow_parent(&self) -> Ref<'_, Option<WeakContainer>>;
 
-  fn borrow_parent_mut(&self) -> RefMut<'_, Option<Container>>;
+  fn borrow_parent_mut(&self) -> RefMut<'_, Option<WeakContainer>>;
 
   fn borrow_children(&self) -> Ref<'_, VecDeque<Container>>;
 
@@ -41,7 +41,10 @@ pub trait CommonGetters {
 
   /// Gets the parent container, unless this container is the root.
   fn parent(&self) -> Option<Container> {
-    self.borrow_parent().clone()
+    self
+      .borrow_parent()
+      .as_ref()
+      .and_then(crate::models::WeakContainer::upgrade)
   }
 
   /// Direct children of this container.
@@ -62,7 +65,7 @@ pub trait CommonGetters {
   /// Whether this container is detached from the tree (i.e. it does not
   /// have a parent).
   fn is_detached(&self) -> bool {
-    self.borrow_parent().as_ref().is_none()
+    self.parent().is_none()
   }
 
   /// Index of this container amongst its siblings.
@@ -70,8 +73,7 @@ pub trait CommonGetters {
   /// Returns 0 if the container has no parent.
   fn index(&self) -> usize {
     self
-      .borrow_parent()
-      .as_ref()
+      .parent()
       .and_then(|parent| {
         parent
           .borrow_children()
@@ -115,17 +117,12 @@ pub trait CommonGetters {
 
   /// Children in order of last focus.
   fn child_focus_order(&self) -> Box<dyn Iterator<Item = Container> + '_> {
-    let child_focus_order = self.borrow_child_focus_order();
-
-    Box::new(std::iter::from_fn(move || {
-      for child_id in child_focus_order.iter() {
-        if let Some(child) = self.child_by_id(child_id) {
-          return Some(child);
-        }
-      }
-
-      None
-    }))
+    let child_focus_order = self.borrow_child_focus_order().clone();
+    Box::new(
+      child_focus_order
+        .into_iter()
+        .filter_map(move |id| self.child_by_id(&id)),
+    )
   }
 
   /// Leaf nodes (i.e. windows and workspaces) in order of last focus.
@@ -345,11 +342,15 @@ macro_rules! impl_common_getters {
         self.to_dto()
       }
 
-      fn borrow_parent(&self) -> Ref<'_, Option<Container>> {
+      fn borrow_parent(
+        &self,
+      ) -> Ref<'_, Option<$crate::models::WeakContainer>> {
         Ref::map(self.0.borrow(), |inner| &inner.parent)
       }
 
-      fn borrow_parent_mut(&self) -> RefMut<'_, Option<Container>> {
+      fn borrow_parent_mut(
+        &self,
+      ) -> RefMut<'_, Option<$crate::models::WeakContainer>> {
         RefMut::map(self.0.borrow_mut(), |inner| &mut inner.parent)
       }
 

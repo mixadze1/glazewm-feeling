@@ -66,6 +66,8 @@ fn main() -> anyhow::Result<()> {
     let (event_loop, dispatcher) = EventLoop::new()?;
 
     let task_handle = std::thread::spawn(move || {
+      // Also stop the main loop if the WM worker unwinds after a panic.
+      let _stop_event_loop = StopEventLoopOnDrop(dispatcher.clone());
       rt.block_on(async {
         let start_res =
           start_wm(config_path, verbosity, &dispatcher).await;
@@ -77,13 +79,6 @@ fn main() -> anyhow::Result<()> {
           dispatcher.show_error_dialog("Fatal error", &err.to_string());
         }
 
-        if let Err(err) = dispatcher.stop_event_loop() {
-          // Forcefully exit the process to ensure the event loop is
-          // stopped.
-          tracing::error!("Failed to stop event loop gracefully: {}", err);
-          process::exit(1);
-        }
-
         start_res
       })
     });
@@ -93,10 +88,42 @@ fn main() -> anyhow::Result<()> {
     event_loop.run()?;
 
     // Wait for clean exit of the WM.
-    task_handle.join().unwrap()
+    task_handle
+      .join()
+      .map_err(|_| anyhow::anyhow!("WM worker panicked."))?
   } else {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(wm_cli::start(args))
+  }
+}
+
+struct StopEventLoopOnDrop(Dispatcher);
+
+#[cfg(all(test, target_os = "windows"))]
+mod shutdown_tests {
+  use super::*;
+
+  #[test]
+  fn worker_unwind_stops_main_event_loop() {
+    let (event_loop, dispatcher) = EventLoop::new().unwrap();
+    let worker = std::thread::spawn(move || {
+      std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _stop = StopEventLoopOnDrop(dispatcher);
+        panic!("simulated worker failure");
+      }))
+      .is_err()
+    });
+    event_loop.run().unwrap();
+    assert!(worker.join().unwrap());
+  }
+}
+
+impl Drop for StopEventLoopOnDrop {
+  fn drop(&mut self) {
+    if let Err(err) = self.0.stop_event_loop() {
+      tracing::error!("Failed to stop event loop gracefully: {err}");
+      process::exit(1);
+    }
   }
 }
 
@@ -130,6 +157,11 @@ async fn start_wm(
     config.active_keybinding_configs(&[], false),
   )?;
 
+  // Declared before the WM so error unwinding restores windows before
+  // the child guard terminates the watcher.
+  #[cfg(target_os = "windows")]
+  let mut watcher = None;
+
   let mut wm = WindowManager::new(&mut config, dispatcher.clone())?;
 
   let mut ipc_server = IpcServer::start().await?;
@@ -137,13 +169,14 @@ async fn start_wm(
   // On Windows, start watcher process for restoring hidden windows on
   // crash. macOS' hidden windows are always accessible.
   #[cfg(target_os = "windows")]
-  if let Err(err) = start_watcher_process() {
-    tracing::warn!(
+  match start_watcher_process() {
+    Ok(child) => watcher = Some(child),
+    Err(err) => tracing::warn!(
       "Failed to start watcher process: {err}{}",
       cfg!(debug_assertions)
         .then_some(".\n Run `cargo build -p wm-watcher` to build it.")
         .unwrap_or_default()
-    );
+    ),
   }
 
   // On macOS, update the current process' PATH variable so that
@@ -348,6 +381,32 @@ async fn start_wm(
   tracing::info!("Window manager shutting down.");
   wm.cleanup(&mut config, &mut ipc_server);
 
+  // Destroy thread-bound resources while the platform loop still runs.
+  drop(keybinding_listener);
+  drop(mouse_listener);
+  drop(display_listener);
+  drop(window_listener);
+  drop(wm);
+  drop(tray);
+
+  // Closing all sockets also releases a watcher that missed the exit
+  // event.
+  ipc_server.stop().await;
+  #[cfg(target_os = "windows")]
+  if let Some(mut watcher) = watcher {
+    match tokio::time::timeout(Duration::from_secs(3), watcher.wait())
+      .await
+    {
+      Ok(Ok(_)) => {}
+      result => {
+        tracing::warn!("Watcher did not exit cleanly: {result:?}");
+        if let Err(err) = watcher.kill().await {
+          tracing::warn!("Failed to terminate watcher: {err}");
+        }
+      }
+    }
+  }
+
   Ok(())
 }
 
@@ -399,6 +458,7 @@ fn start_watcher_process() -> anyhow::Result<tokio::process::Child, Error>
     .join("glazewm-watcher");
 
   Command::new(&watcher_path)
+    .kill_on_drop(true)
     .spawn()
     .context("Failed to start watcher process.")
 }

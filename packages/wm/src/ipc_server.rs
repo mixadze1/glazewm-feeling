@@ -1,11 +1,11 @@
-use std::{iter, net::SocketAddr};
+use std::{cell::RefCell, collections::HashMap, iter, net::SocketAddr};
 
 use anyhow::{bail, Context};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
   net::{TcpListener, TcpStream},
-  sync::{broadcast, mpsc},
+  sync::{broadcast, mpsc, oneshot},
   task,
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
@@ -26,60 +26,70 @@ use crate::{
 };
 
 pub struct IpcServer {
-  abort_handle: task::AbortHandle,
-  pub message_rx: mpsc::UnboundedReceiver<(
-    String,
-    mpsc::UnboundedSender<Message>,
-    broadcast::Sender<()>,
-  )>,
+  server_task: Option<task::JoinHandle<()>>,
+  shutdown_tx: Option<oneshot::Sender<()>>,
+  pub message_rx:
+    mpsc::Receiver<(String, mpsc::Sender<Message>, broadcast::Sender<()>)>,
   _event_rx: broadcast::Receiver<(SubscribableEvent, WmEvent)>,
   event_tx: broadcast::Sender<(SubscribableEvent, WmEvent)>,
-  _unsubscribe_rx: broadcast::Receiver<Uuid>,
-  unsubscribe_tx: broadcast::Sender<Uuid>,
+  subscriptions: RefCell<HashMap<Uuid, task::JoinHandle<()>>>,
 }
 
 impl IpcServer {
   pub async fn start() -> anyhow::Result<Self> {
-    let (message_tx, message_rx) = mpsc::unbounded_channel();
-    let (event_tx, _event_rx) = broadcast::channel(16);
-    let (unsubscribe_tx, _unsubscribe_rx) = broadcast::channel(16);
-
     let server_addr = format!("127.0.0.1:{DEFAULT_IPC_PORT}");
-    let server = TcpListener::bind(server_addr.clone()).await?;
+    let server = TcpListener::bind(&server_addr).await?;
     info!("IPC server started on: '{}'.", server_addr);
+    Ok(Self::with_listener(server))
+  }
+
+  fn with_listener(server: TcpListener) -> Self {
+    let (message_tx, message_rx) = mpsc::channel(256);
+    let (event_tx, _event_rx) = broadcast::channel(16);
+    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
     let task = task::spawn(async move {
-      while let Ok((stream, addr)) = server.accept().await {
-        let message_tx = message_tx.clone();
-
-        task::spawn(async move {
-          if let Err(err) =
-            Self::handle_connection(stream, addr, message_tx).await
-          {
-            warn!("Error handling connection: {}", err);
+      // Dropping this set aborts all connections, including incomplete
+      // handshakes. Reap completed tasks instead of retaining their
+      // results.
+      let mut connections = task::JoinSet::new();
+      loop {
+        tokio::select! {
+          _ = &mut shutdown_rx => {
+            connections.shutdown().await;
+            break;
           }
-        });
+          result = server.accept() => {
+            let Ok((stream, addr)) = result else { break };
+            let message_tx = message_tx.clone();
+            connections.spawn(async move {
+              if let Err(err) = Self::handle_connection(stream, addr, message_tx).await {
+                warn!("Error handling connection: {}", err);
+              }
+            });
+          }
+          _ = connections.join_next(), if !connections.is_empty() => {}
+        }
       }
     });
 
-    Ok(Self {
-      abort_handle: task.abort_handle(),
+    Self {
+      server_task: Some(task),
+      shutdown_tx: Some(shutdown_tx),
       #[allow(clippy::used_underscore_binding)]
       _event_rx,
       event_tx,
       message_rx,
-      unsubscribe_tx,
-      #[allow(clippy::used_underscore_binding)]
-      _unsubscribe_rx,
-    })
+      subscriptions: RefCell::new(HashMap::new()),
+    }
   }
 
   async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
-    message_tx: mpsc::UnboundedSender<(
+    message_tx: mpsc::Sender<(
       String,
-      mpsc::UnboundedSender<Message>,
+      mpsc::Sender<Message>,
       broadcast::Sender<()>,
     )>,
   ) -> anyhow::Result<()> {
@@ -90,20 +100,22 @@ impl IpcServer {
       .context("Error during websocket handshake.")?;
 
     let (mut outgoing, mut incoming) = ws_stream.split();
-    let (response_tx, mut response_rx) = mpsc::unbounded_channel();
+    let (response_tx, mut response_rx) = mpsc::channel(64);
     let (disconnection_tx, _) = broadcast::channel(16);
+    let mut disconnection_rx = disconnection_tx.subscribe();
 
     let res = async {
       loop {
         tokio::select! {
+          _ = disconnection_rx.recv() => break Ok(()),
           Some(response) = response_rx.recv() => {
-            outgoing.send(response).await?;
+            tokio::time::timeout(std::time::Duration::from_secs(5), outgoing.send(response)).await??;
           }
           message = incoming.next() => {
             match message {
               Some(Ok(message)) => {
                 if message.is_text() || message.is_binary() {
-                  message_tx.send((
+                  message_tx.try_send((
                     message.to_text()?.to_string(),
                     response_tx.clone(),
                     disconnection_tx.clone(),
@@ -134,7 +146,7 @@ impl IpcServer {
   pub fn process_message(
     &self,
     message: String,
-    response_tx: &mpsc::UnboundedSender<Message>,
+    response_tx: &mpsc::Sender<Message>,
     disconnection_tx: &broadcast::Sender<()>,
     wm: &mut WindowManager,
     config: &mut UserConfig,
@@ -158,8 +170,9 @@ impl IpcServer {
 
     // Respond to the client with the result of the command.
     response_tx
-      .send(Self::to_client_response_msg(message, response_data)?)
+      .try_send(Self::to_client_response_msg(message, response_data)?)
       .map_err(|err| {
+        let _ = disconnection_tx.send(());
         anyhow::anyhow!("Failed to send response: {}", err)
       })?;
 
@@ -170,7 +183,7 @@ impl IpcServer {
   fn handle_app_command(
     &self,
     app_command: AppCommand,
-    response_tx: &mpsc::UnboundedSender<Message>,
+    response_tx: &mpsc::Sender<Message>,
     disconnection_tx: &broadcast::Sender<()>,
     wm: &mut WindowManager,
     config: &mut UserConfig,
@@ -263,21 +276,22 @@ impl IpcServer {
 
         let response_tx = response_tx.clone();
         let mut event_rx = self.event_tx.subscribe();
-        let mut unsubscribe_rx = self.unsubscribe_tx.subscribe();
         let mut disconnection_rx = disconnection_tx.subscribe();
+        let disconnect = disconnection_tx.clone();
 
-        task::spawn(async move {
+        let subscription = task::spawn(async move {
           loop {
             tokio::select! {
-              Ok(()) = disconnection_rx.recv() => {
-                break;
-              }
-              Ok(id) = unsubscribe_rx.recv() => {
-                if id == subscription_id {
-                  break;
-                }
-              }
-              Ok((event_type, event)) = event_rx.recv() => {
+              // closed() also catches disconnects before this task was
+              // subscribed, and connections aborted during server shutdown.
+              () = response_tx.closed() => break,
+              _ = disconnection_rx.recv() => break,
+              result = event_rx.recv() => {
+                let (event_type, event) = match result {
+                  Ok(event) => event,
+                  Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                  Err(broadcast::error::RecvError::Closed) => break,
+                };
                 // Check whether the event is one of the subscribed events.
                 if events.contains(&event_type)
                   || events.contains(&SubscribableEvent::All)
@@ -288,12 +302,13 @@ impl IpcServer {
                   )
                   .and_then(|event_msg| {
                     response_tx
-                      .send(event_msg)
+                      .try_send(event_msg)
                       .map_err(anyhow::Error::from)
                   });
 
                   if let Err(err) = send_result {
                     warn!("Error emitting WM event: {}", err);
+                    let _ = disconnect.send(());
                     break;
                   }
                 }
@@ -301,16 +316,20 @@ impl IpcServer {
             }
           }
         });
+        let mut subscriptions = self.subscriptions.borrow_mut();
+        subscriptions.retain(|_, task| !task.is_finished());
+        subscriptions.insert(subscription_id, subscription);
 
         ClientResponseData::EventSubscribe(EventSubscribeData {
           subscription_id,
         })
       }
       AppCommand::Unsub { subscription_id } => {
-        self
-          .unsubscribe_tx
-          .send(subscription_id)
-          .context("Failed to unsubscribe from event.")?;
+        if let Some(subscription) =
+          self.subscriptions.borrow_mut().remove(&subscription_id)
+        {
+          subscription.abort();
+        }
 
         ClientResponseData::EventUnsubscribe
       }
@@ -397,14 +416,204 @@ impl IpcServer {
     Ok(())
   }
 
-  pub fn stop(&self) {
+  pub async fn stop(&mut self) {
     info!("Shutting down IPC server.");
-    self.abort_handle.abort();
+    self.message_rx.close();
+    if let Some(shutdown_tx) = self.shutdown_tx.take() {
+      let _ = shutdown_tx.send(());
+    }
+    if let Some(task) = self.server_task.take() {
+      let _ = task.await;
+    }
+    let subscriptions: Vec<_> = self
+      .subscriptions
+      .get_mut()
+      .drain()
+      .map(|(_, task)| task)
+      .collect();
+    for task in &subscriptions {
+      task.abort();
+    }
+    for task in subscriptions {
+      let _ = task.await;
+    }
+    while self.message_rx.try_recv().is_ok() {}
   }
 }
 
 impl Drop for IpcServer {
   fn drop(&mut self) {
-    self.stop();
+    if let Some(task) = &self.server_task {
+      task.abort();
+    }
+    for (_, task) in self.subscriptions.get_mut().drain() {
+      task.abort();
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::time::Duration;
+
+  use tokio::{io::AsyncReadExt, time::timeout};
+
+  use super::*;
+
+  fn mock_wm() -> (WindowManager, UserConfig) {
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (exit_tx, exit_rx) = mpsc::unbounded_channel();
+    let (tick_tx, animation_tick_rx) = mpsc::unbounded_channel();
+    let wm = WindowManager {
+      event_rx,
+      exit_rx,
+      animation_tick_rx,
+      state: crate::wm_state::WmState::new(
+        wm_platform::Dispatcher::mock(),
+        event_tx,
+        exit_tx,
+        tick_tx,
+      ),
+    };
+    let config = UserConfig::new(Some(
+      std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../resources/assets/sample-config.yaml"),
+    ))
+    .unwrap();
+    (wm, config)
+  }
+
+  async fn server() -> (IpcServer, SocketAddr) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    (IpcServer::with_listener(listener), addr)
+  }
+
+  async fn wait_for_subscriptions_to_finish(server: &IpcServer) {
+    timeout(Duration::from_secs(2), async {
+      while server.event_tx.receiver_count() != 1 {
+        task::yield_now().await;
+      }
+    })
+    .await
+    .expect("Subscription task leaked");
+  }
+
+  #[tokio::test]
+  async fn disconnected_client_before_subscribe_does_not_leak() {
+    let (mut server, _) = server().await;
+    let (mut wm, mut config) = mock_wm();
+    let (tx, rx) = mpsc::channel(1);
+    let (disconnect, _) = broadcast::channel(16);
+    drop(rx);
+    for _ in 0..100 {
+      server
+        .handle_app_command(
+          AppCommand::Sub {
+            events: vec![SubscribableEvent::All],
+          },
+          &tx,
+          &disconnect,
+          &mut wm,
+          &mut config,
+        )
+        .unwrap();
+      wait_for_subscriptions_to_finish(&server).await;
+    }
+    assert!(server.subscriptions.borrow().len() <= 1);
+    server.stop().await;
+    assert!(server.subscriptions.borrow().is_empty());
+  }
+
+  #[tokio::test]
+  async fn unsubscribe_burst_cannot_lose_cancellation() {
+    let (mut server, _) = server().await;
+    let (mut wm, mut config) = mock_wm();
+    let (tx, _rx) = mpsc::channel(1);
+    let (disconnect, _) = broadcast::channel(16);
+    let mut ids = Vec::new();
+    for _ in 0..100 {
+      let data = server
+        .handle_app_command(
+          AppCommand::Sub {
+            events: vec![SubscribableEvent::All],
+          },
+          &tx,
+          &disconnect,
+          &mut wm,
+          &mut config,
+        )
+        .unwrap();
+      let ClientResponseData::EventSubscribe(data) = data else {
+        panic!("Missing subscription")
+      };
+      ids.push(data.subscription_id);
+    }
+    for subscription_id in ids {
+      server
+        .handle_app_command(
+          AppCommand::Unsub { subscription_id },
+          &tx,
+          &disconnect,
+          &mut wm,
+          &mut config,
+        )
+        .unwrap();
+    }
+    wait_for_subscriptions_to_finish(&server).await;
+    assert!(server.subscriptions.borrow().is_empty());
+    server.stop().await;
+  }
+
+  #[tokio::test]
+  async fn slow_subscriber_is_disconnected_instead_of_growing_queue() {
+    let (mut server, _) = server().await;
+    let (mut wm, mut config) = mock_wm();
+    let (tx, mut rx) = mpsc::channel(1);
+    let (disconnect, mut disconnected) = broadcast::channel(16);
+    server
+      .handle_app_command(
+        AppCommand::Sub {
+          events: vec![SubscribableEvent::All],
+        },
+        &tx,
+        &disconnect,
+        &mut wm,
+        &mut config,
+      )
+      .unwrap();
+    server.process_event(WmEvent::ApplicationExiting).unwrap();
+    server.process_event(WmEvent::ApplicationExiting).unwrap();
+    timeout(Duration::from_secs(2), disconnected.recv())
+      .await
+      .unwrap()
+      .unwrap();
+    wait_for_subscriptions_to_finish(&server).await;
+    assert!(rx.try_recv().is_ok());
+    assert!(rx.try_recv().is_err());
+    server.stop().await;
+  }
+
+  #[tokio::test]
+  async fn shutdown_closes_connections_and_incomplete_handshakes() {
+    let (mut server, addr) = server().await;
+    let (mut ws, _) =
+      tokio_tungstenite::connect_async(format!("ws://{addr}"))
+        .await
+        .unwrap();
+    let mut pending = TcpStream::connect(addr).await.unwrap();
+    // Let the listener accept the second socket without a WS handshake.
+    task::yield_now().await;
+    timeout(Duration::from_secs(2), server.stop())
+      .await
+      .unwrap();
+    let end = timeout(Duration::from_secs(2), ws.next()).await.unwrap();
+    assert!(end.is_none() || end.unwrap().is_err());
+    let mut byte = [0];
+    let end = timeout(Duration::from_secs(2), pending.read(&mut byte))
+      .await
+      .unwrap();
+    assert!(matches!(end, Ok(0) | Err(_)));
+    assert!(TcpStream::connect(addr).await.is_err());
   }
 }

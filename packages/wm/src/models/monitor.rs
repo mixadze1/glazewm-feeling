@@ -19,11 +19,11 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct Monitor(Rc<RefCell<MonitorInner>>);
+pub struct Monitor(pub(super) Rc<RefCell<MonitorInner>>);
 
-struct MonitorInner {
+pub(super) struct MonitorInner {
   id: Uuid,
-  parent: Option<Container>,
+  parent: Option<super::WeakContainer>,
   children: VecDeque<Container>,
   child_focus_order: VecDeque<Uuid>,
   native: Display,

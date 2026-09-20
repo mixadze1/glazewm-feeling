@@ -28,11 +28,11 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct TilingWindow(Rc<RefCell<TilingWindowInner>>);
+pub struct TilingWindow(pub(super) Rc<RefCell<TilingWindowInner>>);
 
-struct TilingWindowInner {
+pub(super) struct TilingWindowInner {
   id: Uuid,
-  parent: Option<Container>,
+  parent: Option<super::WeakContainer>,
   children: VecDeque<Container>,
   child_focus_order: VecDeque<Uuid>,
   tiling_size: f32,

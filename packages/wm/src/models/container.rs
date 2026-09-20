@@ -1,6 +1,7 @@
 use std::{
-  cell::{Ref, RefMut},
+  cell::{Ref, RefCell, RefMut},
   collections::VecDeque,
+  rc::{Rc, Weak},
 };
 
 use ambassador::Delegate;
@@ -108,6 +109,73 @@ pub enum Container {
   NonTilingWindow(NonTilingWindow),
 }
 
+/// Non-owning parent link. Children own their descendants, never
+/// ancestors.
+#[derive(Clone, Debug)]
+pub struct WeakContainer(WeakContainerInner);
+
+#[derive(Clone, Debug)]
+enum WeakContainerInner {
+  Root(Weak<RefCell<super::root_container::RootContainerInner>>),
+  Monitor(Weak<RefCell<super::monitor::MonitorInner>>),
+  Workspace(Weak<RefCell<super::workspace::WorkspaceInner>>),
+  Split(Weak<RefCell<super::split_container::SplitContainerInner>>),
+  TilingWindow(Weak<RefCell<super::tiling_window::TilingWindowInner>>),
+  NonTilingWindow(
+    Weak<RefCell<super::non_tiling_window::NonTilingWindowInner>>,
+  ),
+}
+
+impl Container {
+  pub fn downgrade(&self) -> WeakContainer {
+    WeakContainer(match self {
+      Self::Root(value) => {
+        WeakContainerInner::Root(Rc::downgrade(&value.0))
+      }
+      Self::Monitor(value) => {
+        WeakContainerInner::Monitor(Rc::downgrade(&value.0))
+      }
+      Self::Workspace(value) => {
+        WeakContainerInner::Workspace(Rc::downgrade(&value.0))
+      }
+      Self::Split(value) => {
+        WeakContainerInner::Split(Rc::downgrade(&value.0))
+      }
+      Self::TilingWindow(value) => {
+        WeakContainerInner::TilingWindow(Rc::downgrade(&value.0))
+      }
+      Self::NonTilingWindow(value) => {
+        WeakContainerInner::NonTilingWindow(Rc::downgrade(&value.0))
+      }
+    })
+  }
+}
+
+impl WeakContainer {
+  pub fn upgrade(&self) -> Option<Container> {
+    match &self.0 {
+      WeakContainerInner::Root(value) => value
+        .upgrade()
+        .map(|inner| Container::Root(RootContainer(inner))),
+      WeakContainerInner::Monitor(value) => value
+        .upgrade()
+        .map(|inner| Container::Monitor(Monitor(inner))),
+      WeakContainerInner::Workspace(value) => value
+        .upgrade()
+        .map(|inner| Container::Workspace(Workspace(inner))),
+      WeakContainerInner::Split(value) => value
+        .upgrade()
+        .map(|inner| Container::Split(SplitContainer(inner))),
+      WeakContainerInner::TilingWindow(value) => value
+        .upgrade()
+        .map(|inner| Container::TilingWindow(TilingWindow(inner))),
+      WeakContainerInner::NonTilingWindow(value) => value
+        .upgrade()
+        .map(|inner| Container::NonTilingWindow(NonTilingWindow(inner))),
+    }
+  }
+}
+
 impl PartialEq for Container {
   fn eq(&self, other: &Self) -> bool {
     self.id() == other.id()
@@ -194,4 +262,85 @@ macro_rules! impl_container_debug {
       }
     }
   };
+}
+
+#[cfg(test)]
+mod ownership_tests {
+  use super::*;
+  use crate::commands::container::{attach_container, detach_container};
+
+  #[test]
+  fn dropping_tree_releases_every_container_type() {
+    let root = RootContainer::new().as_container();
+    let tiled = TilingWindow::mock().call();
+    let floating = NonTilingWindow::mock().call();
+    let split = SplitContainer::mock()
+      .tiling_containers(vec![tiled.clone().into()])
+      .call();
+    let workspace = Workspace::mock()
+      .tiling_containers(vec![split.clone().into()])
+      .non_tiling_windows(vec![floating.clone()])
+      .call();
+    let monitor =
+      Monitor::mock().workspaces(vec![workspace.clone()]).call();
+    attach_container(&monitor.as_container(), &root, None).unwrap();
+    let weak = [
+      root.downgrade(),
+      monitor.as_container().downgrade(),
+      workspace.as_container().downgrade(),
+      split.as_container().downgrade(),
+      tiled.as_container().downgrade(),
+      floating.as_container().downgrade(),
+    ];
+    drop((monitor, workspace, split, tiled, floating));
+    assert!(weak.iter().all(|value| value.upgrade().is_some()));
+    drop(root);
+    assert!(weak.iter().all(|value| value.upgrade().is_none()));
+  }
+
+  #[test]
+  fn detached_subtree_drops_without_leaking_descendants() {
+    let child = TilingWindow::mock().call().as_container();
+    let workspace = Workspace::mock()
+      .tiling_containers(vec![child.clone().try_into().unwrap()])
+      .call()
+      .as_container();
+    let monitor = Monitor::mock().call().as_container();
+    attach_container(&workspace, &monitor, None).unwrap();
+    let weak_child = child.downgrade();
+    drop(child);
+    detach_container(workspace.clone()).unwrap();
+    drop(workspace);
+    assert!(weak_child.upgrade().is_none());
+    assert_eq!(monitor.child_count(), 0);
+  }
+
+  #[test]
+  fn surviving_child_does_not_keep_parent_alive() {
+    let child = TilingWindow::mock().call().as_container();
+    let parent = Workspace::mock().call().as_container();
+    attach_container(&child, &parent, None).unwrap();
+    let weak_parent = parent.downgrade();
+    drop(parent);
+    assert!(weak_parent.upgrade().is_none());
+    assert!(child.is_detached());
+    assert_eq!(child.ancestors().count(), 0);
+  }
+
+  #[test]
+  fn child_focus_iterator_advances_and_terminates() {
+    let first = TilingWindow::mock().call();
+    let second = TilingWindow::mock().call();
+    let workspace = Workspace::mock()
+      .tiling_containers(vec![first.clone().into(), second.clone().into()])
+      .call();
+    // take bounds the regression: the old implementation yielded the
+    // first child forever and collecting the iterator exhausted memory.
+    let ids: Vec<_> = workspace
+      .child_focus_order()
+      .take(3)
+      .map(|child| child.id())
+      .collect();
+    assert_eq!(ids, vec![first.id(), second.id()]);
+  }
 }
