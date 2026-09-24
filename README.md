@@ -62,9 +62,12 @@ Built on [GlazeWM by glzr-io](https://github.com/glzr-io/glazewm), the keyboard-
 
 ## Version 4 history
 
-Version **4.0.6** is the current local build: pause/resume releases animation
-overlays, restored windows rejoin tiling, Alt+F toggles native maximize,
-and focus-follows-cursor respects the tray context menu.
+Version **4.0.7** is the current local build: window positioning no longer
+waits for busy application threads, and owned auxiliary windows remain
+outside WM management.
+
+Version **4.0.6** introduced animation cleanup on pause/resume, restored-window
+tiling, native maximize via Alt+F, and tray-aware focus-follows-cursor.
 
 Version 4 is the Feeling line: a series of changes focused on the **feeling of using a tiling desktop**, from movement between workspaces to the feedback around a single window.
 
@@ -105,7 +108,7 @@ animation and catch up after its UI thread becomes responsive.
 Use the Rust toolchain specified by this repository and the Windows C++ build tools. From PowerShell:
 
 ```powershell
-$env:VERSION_NUMBER = '4.0.6'
+$env:VERSION_NUMBER = '4.0.7'
 cargo build --release -p wm -p wm-cli -p wm-watcher
 ```
 
