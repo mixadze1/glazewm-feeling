@@ -38,6 +38,8 @@ Built on [GlazeWM by glzr-io](https://github.com/glzr-io/glazewm), the keyboard-
 
 ### What's new in Feeling
 
+- Version 4.0.7 queues window positioning so a busy application, such as Unity during domain reload, does not hold up other windows. Repeated requests keep the latest target geometry.
+- Native owned auxiliary windows stay under their application's control, including their focus and visibility. Unity Recorder was verified; other panels depend on how the application exposes ownership to Windows.
 - Vertical moves can first stack a window with its neighbor, then place it across the full workspace width on the next press. Default move shortcuts remain `Alt + Shift + Up/Down`; `Alt + Up/Down` still changes focus.
 - Returning from a temporary stack preserves the original row proportions, including unequal widths. Repeated split/return cycles no longer enlarge neighbors, and horizontal moves past a vertical group stay horizontal.
 - Workspace and window motion is part of the interaction: transitions preserve continuity when you change direction or choose another destination mid-animation.
@@ -91,10 +93,23 @@ Keep `glazewm-watcher.exe` beside the main executable. Both run without a consol
 
 Existing configuration is read from `%USERPROFILE%\.glzr\glazewm\config.yaml`. Back it up before adopting settings from the example. Package-manager packages named `GlazeWM` or `glazewm` belong to the upstream project and do not install this fork.
 
+### Install permanently and start with Windows
+
+For a permanent installation, extract the release into `%ProgramFiles%\glzr.io\GlazeWM` using administrator privileges. When updating, back up the existing files, run `glazewm-cli.exe command wm-exit`, and wait for the watcher to exit before replacing all three executables. Preserve your user configuration and animation settings.
+
+Launch the installed `glazewm.exe` as your normal Windows user, then enable **Run on system startup** in its tray menu. The `GlazeWM` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` should point to the installed executable. Remove duplicate GlazeWM startup shortcuts or entries pointing to temporary builds; the watcher starts automatically with GlazeWM. Check that GlazeWM is enabled in Windows Startup apps.
+
+Verify the running version with:
+
+```powershell
+& "$env:ProgramFiles\glzr.io\GlazeWM\glazewm-cli.exe" query app-metadata
+Get-Process -Name glazewm,glazewm-watcher | Select-Object Name,Path
+```
+
 ### Auxiliary windows and busy applications
 
-GlazeWM leaves owned auxiliary windows (for example, detached Unity
-Recorder/Profiler panels) under the application's control. They are
+GlazeWM leaves owned auxiliary windows (verified with Unity Recorder)
+under the application's control. They are
 excluded before tiling, animation, visibility changes, or focus correction.
 This uses the native Windows owner relationship, not the process name:
 independent main windows in the same process remain manageable. Applications
@@ -104,6 +119,12 @@ Window positioning is queued asynchronously per window. A busy application's
 latest target replaces older pending geometry, allowing other windows and
 keybindings to keep working. A slow window may briefly lag behind its
 animation and catch up after its UI thread becomes responsive.
+
+### 4.0.7 validation
+
+The release was built from [the squash-merged fix](https://github.com/mixadze1/glazewm-feeling/pull/1). Testing of the installed Windows build covered a blocked application UI thread, IPC and workspace hotkeys, resizing another window, recovery to the latest geometry, minimize/restore, closing during animation, and auxiliary-window focus. Unity domain reload and Recorder exclusion were also tested during development.
+
+Slack Call, Unity Profiler and separate loading windows, multiple monitors/DPI changes, and a complete mouse drag-resize remain unverified. The full platform test harness has an existing `dispatch_sync_with_nested` failure reproduced on the base commit. GitHub lint CI stops on existing formatting differences in unchanged files; CI is not green. Windows sign-in was not repeated during installation testing.
 
 ### Build from source
 
@@ -538,7 +559,7 @@ This is a fork of [glzr-io/glazewm](https://github.com/glzr-io/glazewm). Credit 
 
 ## AI Agent instructions: reproduce my Windows setup
 
-Target setup: **GlazeWM Feeling + Zebar**, both starting at Windows sign-in from permanent directories in Program Files and running at **AboveNormal** priority. The verified Feeling version at the time of writing is **4.0.5**. Follow these desktop setup instructions when the user asks to install or restore this configuration.
+Target setup: **GlazeWM Feeling + Zebar**, both starting at Windows sign-in from permanent directories in Program Files and running at **AboveNormal** priority. The verified Feeling version at the time of writing is **4.0.7**. The 4.0.7 update verified GlazeWM's installed path, version, preserved configuration, process priority, and enabled startup registration; Zebar was not changed or revalidated. Follow these desktop setup instructions when the user asks to install or restore this configuration.
 
 ### 1. Install the applications and preserve configuration
 
