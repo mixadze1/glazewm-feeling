@@ -1,6 +1,3 @@
-use std::time::Duration;
-
-use tokio::task;
 use tracing::warn;
 use windows::{
   core::PWSTR,
@@ -27,16 +24,15 @@ use windows::{
         GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible,
         IsZoomed, SendNotifyMessageW, SetForegroundWindow,
         SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPlacement,
-        SetWindowPos, ShowWindowAsync, WindowFromPoint, GA_ROOT,
-        GWL_EXSTYLE, GWL_STYLE, GW_HWNDPREV, GW_OWNER, HWND_NOTOPMOST,
-        HWND_TOP, HWND_TOPMOST, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
-        LWA_ALPHA, LWA_COLORKEY, SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE,
-        SWP_NOOWNERZORDER, SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER,
-        SWP_SHOWWINDOW, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-        SW_SHOWNA, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE,
-        WM_CLOSE, WPF_ASYNCWINDOWPLACEMENT, WS_DLGFRAME, WS_EX_LAYERED,
-        WS_EX_TOPMOST, WS_THICKFRAME,
+        ShowWindowAsync, WindowFromPoint, GA_ROOT, GWL_EXSTYLE, GWL_STYLE,
+        GW_HWNDPREV, GW_OWNER, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST,
+        LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, LWA_COLORKEY,
+        SET_WINDOW_POS_FLAGS, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOCOPYBITS, SWP_NOMOVE, SWP_NOOWNERZORDER,
+        SWP_NOSENDCHANGING, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+        SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOWNA, WINDOWPLACEMENT,
+        WINDOW_EX_STYLE, WINDOW_STYLE, WM_CLOSE, WPF_ASYNCWINDOWPLACEMENT,
+        WS_DLGFRAME, WS_EX_LAYERED, WS_EX_TOPMOST, WS_THICKFRAME,
       },
     },
   },
@@ -44,8 +40,9 @@ use windows::{
 
 use super::com::{IApplicationView, COM_INIT};
 use crate::{
-  Color, CornerStyle, Delta, Dispatcher, LengthValue, OpacityValue, Point,
-  Rect, RectDelta, WindowId, WindowZOrder,
+  window_position_queue::enqueue as queue_window_pos, Color, CornerStyle,
+  Delta, Dispatcher, LengthValue, OpacityValue, Point, Rect, RectDelta,
+  WindowId, WindowZOrder,
 };
 
 /// Magic number used to identify programmatic mouse inputs from our own
@@ -199,8 +196,8 @@ impl NativeWindow {
 
   /// Implements [`NativeWindow::set_frame`].
   pub(crate) fn set_frame(&self, rect: &Rect) -> crate::Result<()> {
-    unsafe {
-      SetWindowPos(
+    {
+      queue_window_pos(
         self.hwnd(),
         HWND_NOTOPMOST,
         rect.x(),
@@ -224,8 +221,8 @@ impl NativeWindow {
     width: i32,
     height: i32,
   ) -> crate::Result<()> {
-    unsafe {
-      SetWindowPos(
+    {
+      queue_window_pos(
         self.hwnd(),
         HWND_NOTOPMOST,
         0,
@@ -246,8 +243,8 @@ impl NativeWindow {
 
   /// Implements [`NativeWindow::reposition`].
   pub(crate) fn reposition(&self, x: i32, y: i32) -> crate::Result<()> {
-    unsafe {
-      SetWindowPos(
+    {
+      queue_window_pos(
         self.hwnd(),
         HWND_NOTOPMOST,
         x,
@@ -268,12 +265,14 @@ impl NativeWindow {
 
   /// Implements [`NativeWindow::minimize`].
   pub(crate) fn minimize(&self) -> crate::Result<()> {
+    crate::window_position_queue::cancel(self.hwnd());
     unsafe { ShowWindowAsync(self.hwnd(), SW_MINIMIZE).ok() }?;
     Ok(())
   }
 
   /// Implements [`NativeWindow::maximize`].
   pub(crate) fn maximize(&self) -> crate::Result<()> {
+    crate::window_position_queue::cancel(self.hwnd());
     unsafe { ShowWindowAsync(self.hwnd(), SW_MAXIMIZE).ok() }?;
     Ok(())
   }
@@ -401,8 +400,8 @@ impl NativeWindow {
       WindowZOrder::AfterWindow(window_id) => HWND(window_id.0),
     };
 
-    unsafe {
-      SetWindowPos(
+    {
+      queue_window_pos(
         self.hwnd(),
         z_order_hwnd,
         rect.x(),
@@ -424,6 +423,7 @@ impl NativeWindow {
 
   /// Implements [`NativeWindowWindowsExt::hide`].
   pub(crate) fn hide(&self) -> crate::Result<()> {
+    crate::window_position_queue::cancel(self.hwnd());
     unsafe { ShowWindowAsync(self.hwnd(), SW_HIDE) }.ok()?;
     Ok(())
   }
@@ -433,6 +433,7 @@ impl NativeWindow {
     &self,
     outer_frame: Option<&Rect>,
   ) -> crate::Result<()> {
+    crate::window_position_queue::cancel(self.hwnd());
     match outer_frame {
       None => {
         unsafe { ShowWindowAsync(self.hwnd(), SW_RESTORE) }.ok()?;
@@ -588,26 +589,10 @@ impl NativeWindow {
     // or resize, so its bits are unchanged — discarding them would
     // force a full repaint of the client area, which flickers on
     // slow-painting apps.
-    let flags = SWP_NOACTIVATE
-      | SWP_ASYNCWINDOWPOS
-      | SWP_SHOWWINDOW
-      | SWP_NOMOVE
-      | SWP_NOSIZE;
+    let flags =
+      SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | SWP_NOMOVE | SWP_NOSIZE;
 
-    unsafe { SetWindowPos(self.hwnd(), z_order_hwnd, 0, 0, 0, 0, flags) }?;
-
-    // Z-order can sometimes still be incorrect after the above call.
-    let handle = self.handle;
-    task::spawn(async move {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-      // Re-check at fire time: the initial call has usually landed by now,
-      // making this retry a no-op that would otherwise repaint the window.
-      if !Self::is_z_order_correct(handle, z_order_hwnd) {
-        let _ = unsafe {
-          SetWindowPos(HWND(handle), z_order_hwnd, 0, 0, 0, 0, flags)
-        };
-      }
-    });
+    queue_window_pos(self.hwnd(), z_order_hwnd, 0, 0, 0, 0, flags)?;
 
     Ok(())
   }
@@ -629,7 +614,7 @@ impl NativeWindow {
     if new_style != style {
       unsafe {
         SetWindowLongPtrW(self.hwnd(), GWL_STYLE, new_style);
-        SetWindowPos(
+        queue_window_pos(
           self.hwnd(),
           HWND_NOTOPMOST,
           0,

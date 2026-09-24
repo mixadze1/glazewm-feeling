@@ -11,8 +11,8 @@ use windows::Win32::{
     },
   },
   UI::WindowsAndMessaging::{
-    GetWindowRect, IsWindow, SetWindowPos, SWP_ASYNCWINDOWPOS,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOSENDCHANGING, SWP_NOZORDER,
+    GetWindowRect, IsWindow, SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOSENDCHANGING, SWP_NOZORDER,
   },
 };
 
@@ -24,8 +24,9 @@ use windows::Win32::{
 const EDGE_SAMPLE_INSET: i32 = 4;
 
 use crate::{
-  native_surrogate::to_logical, Color, CornerStyle, NativeSurrogate, Rect,
-  SurrogateBatch,
+  native_surrogate::to_logical,
+  window_position_queue::enqueue as queue_window_pos, Color, CornerStyle,
+  NativeSurrogate, Rect, SurrogateBatch,
 };
 
 /// Options for [`ResizeSession::begin`].
@@ -430,8 +431,8 @@ impl ResizeSession {
     // SAFETY: The window is cloaked while a surrogate session is active,
     // so this reposition is invisible. `SWP_NOZORDER` makes
     // `hWndInsertAfter` irrelevant.
-    unsafe {
-      let _ = SetWindowPos(
+    {
+      let _ = queue_window_pos(
         HWND(self.hwnd),
         HWND(0),
         self.target_rect.x(),
@@ -711,8 +712,8 @@ impl ResizeSession {
         // contention on the target process's message queue.
         //
         // SAFETY: Window is cloaked during an active animation.
-        unsafe {
-          let _ = SetWindowPos(
+        {
+          let _ = queue_window_pos(
             HWND(self.hwnd),
             HWND(0),
             new_target.x(),
@@ -802,9 +803,9 @@ impl ResizeSession {
     }
   }
 
-  /// Snaps the surrogate to the final target rect and ensures the real
-  /// window is at its target position, in preparation for
-  /// `platform_sync` to uncloak it.
+  /// Snaps the surrogate and queues the real window's final position.
+  /// `platform_sync` may uncloak it before a busy app applies the request;
+  /// animation cleanup must never wait for a foreign message pump.
   ///
   /// Checks `IsWindow` and nullifies the stored handle if the window has
   /// been destroyed mid-animation, so that [`commit`] skips the
@@ -818,15 +819,8 @@ impl ResizeSession {
       return;
     }
 
-    // Skip the synchronous move when the window is already at target.
-    // `maybe_handoff` (shrinking sessions) and the initial async
-    // preposition (growing sessions) have normally moved the window to
-    // `target_rect` well before the animation completes, so this is a
-    // no-op in the common case. Avoiding a redundant synchronous
-    // `SetWindowPos` eliminates the occasional cross-process stall at
-    // animation end for apps with slow message queues. The call is
-    // kept as a correctness fallback for the rare case where neither
-    // earlier move was processed in time.
+    // Measure actual geometry; a queued request is not an acknowledgement.
+    // A mismatch queues the latest target without extending the animation.
     //
     // SAFETY: `HWND(self.hwnd)` is valid (verified above).
     let mut current = RECT::default();
@@ -846,8 +840,8 @@ impl ResizeSession {
     if !already_at_target {
       // SAFETY: `HWND(self.hwnd)` is valid (verified above).
       // `SWP_NOZORDER` makes `hWndInsertAfter` irrelevant.
-      unsafe {
-        let _ = SetWindowPos(
+      {
+        let _ = queue_window_pos(
           HWND(self.hwnd),
           HWND(0),
           self.target_rect.x(),
@@ -875,15 +869,11 @@ impl ResizeSession {
     }
     let logical = to_logical(&self.target_rect, &self.border_inset);
     if let Some(surrogate) = &mut self.surrogate {
-      // The real window was just resized to the target above, but the live
-      // DWM thumbnail still maps the old content dimensions — for the 1–2
-      // frames until teardown it would sample a window that no longer
-      // matches its registration, producing a visible scale glitch. Update
-      // to target dims so the surrogate becomes a pixel-aligned 1:1 mirror
-      // of the resized window and the teardown swap is seamless.
-      // Single-call update rather than a full re-registration, which
-      // can blank the surrogate for a composition frame.
-      if surrogate.content_size() != (logical.width(), logical.height()) {
+      // Only register target content dimensions after observing them.
+      // A stalled app can still be rendering its previous size.
+      if already_at_target
+        && surrogate.content_size() != (logical.width(), logical.height())
+      {
         surrogate.update_thumbnail_dims(
           HWND(self.hwnd),
           logical.width(),
@@ -926,8 +916,8 @@ impl ResizeSession {
     // SAFETY: `HWND(self.hwnd)` is valid (verified above). With
     // `SWP_NOZORDER` set, `hWndInsertAfter` (`HWND(0)`) is ignored per
     // the Win32 documentation.
-    unsafe {
-      SetWindowPos(
+    {
+      queue_window_pos(
         HWND(self.hwnd),
         HWND(0),
         self.target_rect.x(),

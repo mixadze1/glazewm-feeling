@@ -86,6 +86,20 @@ Keep `glazewm-watcher.exe` beside the main executable. Both run without a consol
 
 Existing configuration is read from `%USERPROFILE%\.glzr\glazewm\config.yaml`. Back it up before adopting settings from the example. Package-manager packages named `GlazeWM` or `glazewm` belong to the upstream project and do not install this fork.
 
+### Auxiliary windows and busy applications
+
+GlazeWM leaves owned auxiliary windows (for example, detached Unity
+Recorder/Profiler panels) under the application's control. They are
+excluded before tiling, animation, visibility changes, or focus correction.
+This uses the native Windows owner relationship, not the process name:
+independent main windows in the same process remain manageable. Applications
+that expose an auxiliary as an independent window still need a window rule.
+
+Window positioning is queued asynchronously per window. A busy application's
+latest target replaces older pending geometry, allowing other windows and
+keybindings to keep working. A slow window may briefly lag behind its
+animation and catch up after its UI thread becomes responsive.
+
 ### Build from source
 
 Use the Rust toolchain specified by this repository and the Windows C++ build tools. From PowerShell:

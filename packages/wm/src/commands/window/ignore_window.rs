@@ -58,6 +58,11 @@ pub fn ignore_window(
   window: WindowContainer,
   state: &mut WmState,
 ) -> anyhow::Result<()> {
+  #[cfg(target_os = "windows")]
+  {
+    use wm_platform::NativeWindowWindowsExt;
+    window.native().cancel_pending_position();
+  }
   // Create iterator of parent, grandparent, and great-grandparent.
   let ancestors = window.ancestors().take(3).collect::<Vec<_>>();
 

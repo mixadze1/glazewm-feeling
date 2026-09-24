@@ -17,6 +17,8 @@ mod platform_event;
 mod platform_impl;
 mod thread_bound;
 mod window_listener;
+#[cfg(target_os = "windows")]
+mod window_position_queue;
 
 pub use dispatcher::*;
 pub use display::*;

@@ -8,7 +8,8 @@ mod set_window_position;
 mod set_window_size;
 mod unmanage_window;
 mod update_window_state;
-
+#[cfg(target_os = "windows")]
+mod window_eligibility;
 pub use ignore_window::*;
 pub use manage_window::*;
 pub use move_window_in_direction::*;
@@ -19,3 +20,5 @@ pub use set_window_position::*;
 pub use set_window_size::*;
 pub use unmanage_window::*;
 pub use update_window_state::*;
+#[cfg(target_os = "windows")]
+pub use window_eligibility::unmanaged_window_reason;

@@ -1811,7 +1811,8 @@ impl AnimationManager {
   }
 
   /// Returns `true` when `window_id`'s animation just completed and
-  /// `pre_commit` synchronously positioned the real window at `rect`.
+  /// `pre_commit` queued the real window's final position at `rect`.
+  /// Callers must separately verify its actual geometry.
   ///
   /// Used by `platform_sync` on the completion redraw to skip the
   /// redundant `SetWindowPos` — its `SWP_FRAMECHANGED` would force a
