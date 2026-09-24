@@ -982,7 +982,7 @@ fn redraw_containers(
       AnimationPositionResult::Frozen => {
         // A surrogate overlay is covering this window. On the first frame,
         // cloak the real window (so only the surrogate is visible) and
-        // synchronously pre-position it at its target rect. Both
+        // queue its target rect without waiting for the application. Both
         // operations are skipped on subsequent frames: they are
         // idempotent, and repeating a blocking `SetWindowPos`
         // cross-process every tick stalls the animation loop on
@@ -993,9 +993,9 @@ fn redraw_containers(
         // window mid-animation the next tick will re-cloak and
         // re-position it.
         //
-        // For `ResizeSession`-backed animations, `pre_commit` also calls
-        // `SetWindowPos` synchronously just before the surrogate drops,
-        // guaranteeing the window is at `target_rect` when uncloaked.
+        // For `ResizeSession`-backed animations, `pre_commit` also queues
+        // the latest target before the surrogate drops. A busy application
+        // can catch up after it is uncloaked.
         // Skip the per-tick `DwmGetWindowAttribute(DWMWA_CLOAKED)`
         // round-trip for resize-session windows whose cloak state
         // is already known — the check only fires on the first
@@ -1309,12 +1309,10 @@ fn reposition_window(
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
   z_order: &WindowZOrder,
   is_visible: bool,
-  // When true, `SWP_ASYNCWINDOWPOS` is omitted so that adjacent windows
-  // move synchronously with the surrogate overlay (both hit DWM in the
-  // same frame), preventing a one-frame gap between the overlay and its
-  // neighbours.
+  // Kept for callers tracking surrogate ownership; foreign positioning
+  // is always asynchronous, regardless of animation state.
   #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-  has_surrogate: bool,
+  _has_surrogate: bool,
   config: &UserConfig,
 ) -> anyhow::Result<()> {
   // For `HideMethod::PlaceInCorner`, we need to reposition hidden windows
@@ -1406,20 +1404,10 @@ fn reposition_window(
         window.native().restore(Some(rect))?;
       }
 
-      // During animation frames, omit `SWP_ASYNCWINDOWPOS` so that
-      // adjacent windows are repositioned synchronously. This keeps
-      // their on-screen position in lock-step with surrogate
-      // overlays (which update DWM directly via
-      // `UpdateLayeredWindow`), closing the blank gap that
-      // appears when async repositioning lags one frame behind the
-      // surrogate.
-      let mut swp_flags = SWP_NOACTIVATE
-        | SWP_NOSENDCHANGING
-        | if has_surrogate {
-          Default::default()
-        } else {
-          SWP_ASYNCWINDOWPOS
-        };
+      // A busy application may lag behind the overlay, but must never
+      // stall the WM's animation, input, or IPC loop.
+      let mut swp_flags =
+        SWP_NOACTIVATE | SWP_NOSENDCHANGING | SWP_ASYNCWINDOWPOS;
 
       match &window.state() {
         WindowState::Minimized => {
@@ -1457,7 +1445,7 @@ fn reposition_window(
           // once per DPI-change event, not on every subsequent animation
           // frame.
           if window.has_pending_dpi_adjustment() {
-            window.native().set_window_pos(z_order, rect, swp_flags)?;
+            window.native().retry_position_after_dpi_change();
             window.set_has_pending_dpi_adjustment(false);
           }
         }

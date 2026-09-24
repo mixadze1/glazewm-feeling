@@ -115,7 +115,12 @@ pub(crate) fn inspect_candidate(
   // Exclude before cloaking, insertion or focus changes. An ordinary
   // post-manage ignore rule is too late to avoid disturbing the layout.
   #[cfg(target_os = "windows")]
-  if super::is_unmanaged_system_window(native_window) {
+  if let Some(reason) = super::unmanaged_window_reason(native_window) {
+    tracing::debug!(
+      ?native_window,
+      reason,
+      "Window excluded before management"
+    );
     return Ok(None);
   }
 
@@ -133,43 +138,6 @@ pub(crate) fn inspect_candidate(
 
   // Ensure window has a valid process name, title, etc.
   let native_properties = NativeWindowProperties::try_from(native_window)?;
-
-  #[cfg(target_os = "windows")]
-  {
-    use wm_platform::{
-      NativeWindowWindowsExt, WS_CAPTION, WS_CHILD, WS_EX_NOACTIVATE,
-      WS_EX_TOOLWINDOW,
-    };
-
-    // TODO: Temporary fix for managing Flow Launcher until a force manage
-    // command is added.
-    let is_flow_launcher = native_properties.process_name
-      == "Flow.Launcher"
-      && native_properties.title == "Flow.Launcher";
-
-    if !is_flow_launcher {
-      // Ensure window is top-level (i.e. not a child window). Ignore
-      // windows that cannot be focused or if they're unavailable in
-      // task switcher (alt+tab menu).
-      if native_window.has_window_style(WS_CHILD)
-        || native_window
-          .has_window_style_ex(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
-      {
-        return Ok(None);
-      }
-
-      // Some applications spawn top-level windows for menus that
-      // should be ignored. This includes the autocomplete popup in
-      // Notepad++ and title bar menu in Keepass. Although not
-      // foolproof, these can typically be identified by having an
-      // owner window and no title bar.
-      if native_window.has_owner_window()
-        && !native_window.has_window_style(WS_CAPTION)
-      {
-        return Ok(None);
-      }
-    }
-  }
 
   Ok(Some(native_properties))
 }

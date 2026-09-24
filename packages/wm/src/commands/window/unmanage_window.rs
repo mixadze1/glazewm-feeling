@@ -89,6 +89,11 @@ pub fn unmanage_window(
   // Clean up animation tracking data.
   state.window_target_positions.remove(&window.id());
   state.animation_manager.remove_animation(&window.id());
+  #[cfg(target_os = "windows")]
+  {
+    use wm_platform::NativeWindowWindowsExt;
+    window.native().cancel_pending_position();
+  }
 
   // After detaching the container, flatten any redundant split containers.
   // For example, in the layout V[1 H[2]] where container 1 is detached to

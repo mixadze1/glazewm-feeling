@@ -1,6 +1,6 @@
 <div align="center">
 
-> Version 4.0.5 is available: [download the Windows x64 release](https://github.com/mixadze1/glazewm-feeling/releases/latest).
+> Version 4.0.7 is available: [download the Windows x64 release](https://github.com/mixadze1/glazewm-feeling/releases/latest).
 
   <br>
   <img src="./resources/assets/logo.svg" width="230" alt="GlazeWM logo" />
@@ -62,14 +62,19 @@ Built on [GlazeWM by glzr-io](https://github.com/glzr-io/glazewm), the keyboard-
 
 ## Version 4 history
 
-Version **4.0.6** is the current local build: pause/resume releases animation
-overlays, restored windows rejoin tiling, Alt+F toggles native maximize,
-and focus-follows-cursor respects the tray context menu.
+Version **4.0.7** introduces asynchronous positioning: GlazeWM no longer
+waits for busy application threads, and owned auxiliary windows remain
+outside WM management.
+
+Version **4.0.6** introduced animation cleanup on pause/resume, restored-window
+tiling, native maximize via Alt+F, and tray-aware focus-follows-cursor.
 
 Version 4 is the Feeling line: a series of changes focused on the **feeling of using a tiling desktop**, from movement between workspaces to the feedback around a single window.
 
 | Release | What changed |
 | --- | --- |
+| [4.0.7 — Responsive window management](https://github.com/mixadze1/glazewm-feeling/releases/tag/v4.0.7) | Keep input and other windows responsive while an application's UI thread is busy. Coalesce pending geometry, preserve DPI retries, and leave owned auxiliary windows such as Unity Recorder outside layout and focus management. |
+| [4.0.6 — Desktop and lifecycle](https://github.com/mixadze1/glazewm-feeling/releases/tag/v4.0.6) | Add desktop hide/restore, improve pause/resume and minimized-window restoration, and exclude system capture tools and utilities. |
 | [4.0.0 — The Feeling foundation](https://github.com/mixadze1/glazewm-feeling/releases/tag/v4.0.0) | Animated workspace slides with continuous position and velocity when retargeting or reversing; visible intermediate workspaces; directional window transfers with an exit and reveal; configurable duration and easing. Also improved live mouse resizing, minimum-size handling, directional move sizing, and focused-window outlines. |
 | [4.0.2 — Clear active state](https://github.com/mixadze1/glazewm-feeling/releases/tag/v4.0.2) | Added the Active tray checkmark, synchronized with the pause shortcut, so tiling can be toggled from either the keyboard or the tray. |
 | [4.0.3 — A desktop that adapts](https://github.com/mixadze1/glazewm-feeling/releases/tag/v4.0.3) | Added automatic safe areas for visible edge bars and the Windows taskbar. The layout adapts as panels appear, disappear, or change size, while preserving configured outer gaps. |
@@ -78,7 +83,7 @@ Version 4 is the Feeling line: a series of changes focused on the **feeling of u
 
 ## Installation
 
-1. Download `glazewm-v4.0.5-windows-x64.zip` from the [Feeling releases](https://github.com/mixadze1/glazewm-feeling/releases/latest).
+1. Download `glazewm-v4.0.7-windows-x64.zip` from the [Feeling releases](https://github.com/mixadze1/glazewm-feeling/releases/latest).
 2. Extract the entire archive into one directory.
 3. Close any existing GlazeWM instance, then launch `glazewm.exe`.
 
@@ -86,12 +91,26 @@ Keep `glazewm-watcher.exe` beside the main executable. Both run without a consol
 
 Existing configuration is read from `%USERPROFILE%\.glzr\glazewm\config.yaml`. Back it up before adopting settings from the example. Package-manager packages named `GlazeWM` or `glazewm` belong to the upstream project and do not install this fork.
 
+### Auxiliary windows and busy applications
+
+GlazeWM leaves owned auxiliary windows (for example, detached Unity
+Recorder/Profiler panels) under the application's control. They are
+excluded before tiling, animation, visibility changes, or focus correction.
+This uses the native Windows owner relationship, not the process name:
+independent main windows in the same process remain manageable. Applications
+that expose an auxiliary as an independent window still need a window rule.
+
+Window positioning is queued asynchronously per window. A busy application's
+latest target replaces older pending geometry, allowing other windows and
+keybindings to keep working. A slow window may briefly lag behind its
+animation and catch up after its UI thread becomes responsive.
+
 ### Build from source
 
 Use the Rust toolchain specified by this repository and the Windows C++ build tools. From PowerShell:
 
 ```powershell
-$env:VERSION_NUMBER = '4.0.6'
+$env:VERSION_NUMBER = '4.0.7'
 cargo build --release -p wm -p wm-cli -p wm-watcher
 ```
 

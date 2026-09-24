@@ -142,6 +142,16 @@ impl NativeWindowExtMacOs for NativeWindow {
 /// Windows-specific extensions for [`NativeWindow`].
 #[cfg(target_os = "windows")]
 pub trait NativeWindowWindowsExt {
+  /// Discards delayed geometry when a window leaves WM management.
+  fn cancel_pending_position(&self) {
+    crate::window_position_queue::cancel(self.hwnd());
+  }
+
+  /// Reapplies the pending geometry once after the first request settles.
+  fn retry_position_after_dpi_change(&self) {
+    crate::window_position_queue::retry_after_apply(self.hwnd());
+  }
+
   /// Creates a [`NativeWindow`] from a window handle.
   ///
   /// # Platform-specific

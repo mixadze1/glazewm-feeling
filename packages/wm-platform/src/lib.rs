@@ -27,6 +27,8 @@ mod window_listener;
 #[cfg(target_os = "windows")]
 mod window_position_batch;
 #[cfg(target_os = "windows")]
+mod window_position_queue;
+#[cfg(target_os = "windows")]
 pub use window_position_batch::set_window_positions;
 
 #[cfg(feature = "test_utils")]
