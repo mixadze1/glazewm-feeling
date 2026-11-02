@@ -1,114 +1,99 @@
-# Contributing to GlazeWM
+# Contributing to GlazeWM Feeling
 
-Thanks for your interest in improving GlazeWM 💛
+Thanks for helping make window management feel better!
 
-There are fundamentally three ways to contribute:
+GlazeWM Feeling is a Windows-focused fork of [GlazeWM by glzr-io](https://github.com/glzr-io/glazewm). It builds on the upstream project with workspace animations, keyboard resizing, focus outlines, and layout improvements. This guide is for contributions to **Feeling**.
 
-1. **Opening issues**: If you believe you've found a bug or have a feature request, open an issue to discuss it.
+## Ways to help
 
-2. **Helping triage issues**: Add supporting details and suggestions to existing issues.
+- **Report a bug** or suggest an improvement in [Feeling's issues](https://github.com/mixadze1/glazewm-feeling/issues).
+- **Help reproduce an issue** by sharing clear steps, configuration details, or a short recording.
+- **Improve the code or documentation** with a focused pull request.
+- **Support development** through [Ko-fi](https://ko-fi.com/mixadze1). Donations are optional; feedback, bug reports, and code contributions are just as welcome.
 
-3. **Submitting PRs**: Submit a PR that fixes a bug or implements a feature.
+[![Support on Ko-fi](https://img.shields.io/badge/Support-Ko--fi-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/mixadze1)
 
-The [#glazewm-dev channel ⚡](https://discord.com/invite/ud6z3qjRvM) is also available for any concerns not covered in this guide, please join us!
+## Reporting bugs and requesting features
 
-## Pull requests & dev workflow
+Search the [existing issues](https://github.com/mixadze1/glazewm-feeling/issues) first. For a bug report, include:
 
-For PRs, a good place to start are the issues marked as [`good first issue`](https://github.com/glzr-io/glazewm/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) or [`help wanted`](https://github.com/glzr-io/glazewm/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22). PR's don't have a requirement to have a corresponding issue, but if there is one already, please drop a comment in the issue and we can assign it to you.
+- Your Feeling version and Windows version.
+- Steps to reproduce, what you expected, and what happened instead.
+- The affected applications and relevant configuration snippets.
+- Your monitor arrangement and display scaling if the problem involves layouts, movement, or outlines.
+- A screenshot or short recording when it helps explain the behavior.
 
-### Setup
+Remove private information from logs, screenshots, and configuration before sharing them. If you can compare the behavior with upstream GlazeWM, mention the result, but that comparison is not required.
 
-First fork, then clone the repo:
+For a feature request, describe the task you want to make easier and give a concrete example. Discuss larger changes in an issue before starting implementation.
 
-```shell
-git clone git@github.com:your-username/glazewm.git
+Please report Feeling-specific problems here, rather than in the upstream GlazeWM or Zebar repositories. If a problem is confirmed in upstream GlazeWM too, link the related upstream issue so the work can be coordinated.
+
+## Local development
+
+Use Windows with the C++ build tools and Windows SDK required by the Rust MSVC toolchain. Install [Rust through rustup](https://rustup.rs/). The repository's [rust-toolchain.toml](rust-toolchain.toml) selects the toolchain used for development.
+
+Fork this repository, then clone your fork:
+
+```powershell
+git clone https://github.com/YOUR-USERNAME/glazewm-feeling.git
+cd glazewm-feeling
+git switch -c fix/describe-your-change
 ```
 
-If not already installed, [install Rust](https://rustup.rs/), then run:
+Build the application, CLI, and watcher:
 
-```shell
-# `cargo build` will build all binaries and libraries.
-# `cargo run` will run the default binary, which is configured to be the wm.
-cargo build && cargo run
+```powershell
+# Local development version used by the Windows resource build scripts.
+$env:VERSION_NUMBER = '0.0.0'
+cargo build -p wm -p wm-cli -p wm-watcher
 ```
 
-After making your changes, push to your fork and [submit a pull request](https://github.com/glzr-io/zebar/pulls) against the `main` branch. Please try to address only a single feature or fix in the PR so that it's easy to review.
+Back up your configuration at `%USERPROFILE%\.glzr\glazewm\config.yaml`, then close any running GlazeWM instance before starting your development build:
 
-### Tips
-
-If using VSCode, it's recommended to use the [Rust Analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer) extension. Get automatic linting by adding this to your VSCode's `settings.json`:
-
-```json
-{
-  "rust-analyzer.check.command": "clippy"
-}
+```powershell
+cargo run -p wm
 ```
+
+Feeling keeps GlazeWM's executable and configuration names. Avoid running the upstream application and your development build at the same time. See the [README](README.md#build-from-source) for release build instructions and [sample configuration](resources/assets/sample-config.yaml) for default settings.
+
+## Pull requests
+
+Open a [pull request in this repository](https://github.com/mixadze1/glazewm-feeling/pulls) targeting `main`.
+
+- Keep each PR focused on one fix or feature; avoid unrelated formatting changes.
+- Explain the problem, the resulting behavior, and how you checked it. Link a related issue when one exists.
+- Include before/after screenshots or a short recording for visible changes.
+- Update documentation and sample configuration when behavior or settings change.
+- Check that existing configurations and keyboard workflows still work.
+
+Before submitting code changes, run these checks from the repository root, with `VERSION_NUMBER` still set:
+
+```powershell
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+Run relevant existing tests and manually check the behavior you changed. For animation or layout work, include rapid workspace switches, interrupted transitions, and multi-monitor behavior when relevant. State what you actually verified and any checks you could not run. Documentation-only changes do not need an application build.
 
 ## Codebase overview
 
-Knowledge of the entire codebase should never be required to make changes. The following should hopefully help with understanding a particular part of the codebase.
+The Rust workspace is organized under [`packages`](packages):
 
-### Crates
+| Crate | Purpose |
+| --- | --- |
+| `wm` | Window management, commands, event handling, and animations. |
+| `wm-cli` | Command-line interface for interacting with the running window manager. |
+| `wm-common` | Shared types and utilities. |
+| `wm-ipc-client` | WebSocket client for communication with the window manager. |
+| `wm-platform` | Platform-specific APIs and native window handling. |
+| `wm-watcher` | Cleanup when the main application exits. |
+| `wm-macros` | Procedural macros shared by the workspace. |
 
-GlazeWM is organized into several Rust crates:
+The window manager's state lives in [`WmState`](packages/wm/src/wm_state.rs). [Commands](packages/wm/src/commands) handle actions from keyboard bindings, IPC, and internal calls; [events](packages/wm/src/events) react to platform changes. The application entry point is [`main.rs`](packages/wm/src/main.rs).
 
-- `wm` (bin): Main application, which implements the core window management logic.
-  - Gets installed to `C:\Program Files\glzr.io\glazewm.exe`.
-- `wm-cli` (bin/lib): CLI for interacting with the main application.
-  - Gets installed to `C:\Program Files\glzr.io\cli\glazewm.exe`. This is added to `$PATH` by default.
-- `wm-common` (lib): Shared types, utilities, and constants used across other crates.
-- `wm-ipc-client` (lib): WebSocket client library for IPC with the main application.
-- `wm-platform` (lib): Wrappers over platform-specific API's - other crates don't interact directly with the Windows and macOS API's.
-- `wm-watcher` (bin): Watchdog process that ensures proper cleanup when the main application exits.
-  - Gets installed to `C:\Program Files\glzr.io\glazewm-watcher.exe`.
+Windows are represented in a container tree: root, monitors, workspaces, split containers, and application windows. You do not need to understand the whole codebase to contribute; start with the area related to your change.
 
-### Commands & events
+## Credit
 
-GlazeWM uses a command-event architecture. The state of the WM (stored in [`WmState`](https://github.com/glzr-io/glazewm/blob/main/packages/wm/src/wm_state.rs)) is modified via [commands](https://github.com/glzr-io/glazewm/tree/main/packages/wm/src/commands) and [events](https://github.com/glzr-io/glazewm/tree/main/packages/wm/src/events).
-
-- Commands are run as a result of keybindings, IPC calls, the CLI (which calls IPC internally), or by being called from another command. Most commands are just for internal use and might not have a public-facing API.
-- Events arise from the Windows platform (e.g. a window being created, destroyed, focused, etc.). Each of these events have a handler that then modifies the WM state.
-
-Commands and events are processed in a loop in [`start_wm`](https://github.com/glzr-io/glazewm/blob/main/packages/wm/src/main.rs#L68).
-
-## Container tree
-
-Windows in GlazeWM are organized within a tree hierarchy with the following "container" types:
-
-- Root
-- Monitors (physical displays)
-- Workspaces (virtual groups of windows)
-- Split containers (for tiling layouts)
-- Windows (application windows)
-
-Here's an example container tree:
-
-```
-                                            Root
-                                             |
-                            +----------------+----------------+
-                            |                                 |
-                        Monitor 1                         Monitor 2
-                            |                                 |
-                   +--------+--------+                        |
-                   |                 |                        |
-               Workspace 1       Workspace 2             Workspace 3
-               [horizontal]      [vertical]              [horizontal]
-                   |                 |                        |
-                   |                 |                        |
-              +----+----+      Tiling Window            +-----+-----+
-              |         |        (Spotify)              |           |
-        Tiling Window   |                       Tiling Window  Floating Window
-         (Terminal)     |                         (Discord)       (Slack)
-                        |
-                        |
-                  Split Container
-                    [vertical]
-                        |
-                   +----+----+
-                   |         |
-           Tiling Window  Tiling Window
-             (Chrome)      (VS Code)
-```
-
-Windows can be either tiling (nested within split containers) or non-tiling (floating, minimized, maximized, or fullscreen). Non-tiling windows are always direct children of a workspace. Split containers can only have windows as children, and must have at least one child window.
+Feeling builds on the work of the GlazeWM maintainers and contributors. Keep that attribution intact, and credit any external code or assets you include. Thank you for contributing!
