@@ -14,6 +14,7 @@ Feeling is a Windows-focused fork of GlazeWM built around the way your desktop *
 
 [![Downloads][downloads-badge]][downloads-link]
 [![Issues][issues-badge]][issues-link]
+[![Support on Ko-fi](https://img.shields.io/badge/Support-Ko--fi-ff5e5b?logo=ko-fi&logoColor=white)](https://ko-fi.com/mixadze1)
 
 Built on [GlazeWM by glzr-io](https://github.com/glzr-io/glazewm), the keyboard-driven tiling window manager inspired by i3wm. Feeling keeps its YAML configuration and keyboard workflow while adding motion, visual feedback, and layout refinements. The executable and configuration names remain compatible with GlazeWM.
 
